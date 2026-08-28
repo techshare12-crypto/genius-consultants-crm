@@ -1,0 +1,930 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                  String            @id @default(uuid())
+  name                String
+  username            String?           @unique
+  email               String            @unique
+  passwordHash        String
+  role                String            @default("EXECUTIVE") // SUPER_ADMIN, ADMIN, TEAM_LEADER, EXECUTIVE, HR_MANAGER, RECRUITER, DATA_ENTRY_OPERATOR, READ_ONLY_MANAGER
+  roleId              String?
+  phone               String?
+  status              String            @default("ACTIVE")    // ACTIVE, INACTIVE, DEACTIVATED
+  joiningDate         DateTime?         @default(now())
+  lastLoginAt         DateTime?
+  profilePhoto        String?
+  targetCallsDaily    Int               @default(100)
+  targetShortlistDaily Int              @default(10)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  roleRel             Role?             @relation(fields: [roleId], references: [id])
+  assignedCandidates  Candidate[]       @relation("AssignedExecutive")
+  ownedCandidates     Candidate[]       @relation("LeadOwner")
+  callActivities      CallActivity[]
+  callbacks           Callback[]
+  shortlistRecords    ShortlistRecord[] @relation("ShortlistedBy")
+  leadAssignmentsMade LeadAssignment[]  @relation("AssignedBy")
+  leadAssignmentsRecv LeadAssignment[]  @relation("AssignedTo")
+  importBatches       ImportBatch[]
+  activityLogs        ActivityLog[]
+  notifications       Notification[]
+  dailySummaries      DailyCallingSummary[]
+
+  // Client & Job relations
+  clientsCreated      Client[]          @relation("ClientCreatedBy")
+  managedJobOrders    JobOrder[]        @relation("JobOrderManager")
+  jobApplications     CandidateJobApplication[] @relation("JobAppAssignedExec")
+  jobApplicationsAdded CandidateJobApplication[] @relation("JobAppAddedBy")
+  submissionsMade     CandidateSubmission[] @relation("SubmissionSubmittedBy")
+  interviewsScheduled Interview[]       @relation("InterviewScheduledBy")
+  placementsRecorded  Placement[]       @relation("PlacementRecordedBy")
+
+  // Team & Coaching relations
+  ledTeams            Team[]            @relation("TeamLeader")
+  createdTeams        Team[]            @relation("TeamCreator")
+  teamMemberships     TeamMembership[]
+  coachingNotesReceived CoachingNote[]  @relation("CoachingNoteExec")
+  coachingNotesGiven   CoachingNote[]   @relation("CoachingNoteLeader")
+
+  // Communication relations
+  communicationsInitiated CommunicationActivity[] @relation("CommInitiatedBy")
+  formsSent               CandidateFormTracking[] @relation("FormSentBy")
+  remindersAssigned       CommunicationReminder[] @relation("ReminderUser")
+  templatesCreated        MessageTemplate[]       @relation("TemplateCreatedBy")
+
+  // Document Management relations
+  documentsUploaded   CandidateDocument[] @relation("DocUploadedBy")
+  documentsVerified   CandidateDocument[] @relation("DocVerifiedBy")
+
+  // Registration Link relations
+  registrationLinksCreated  RegistrationLink[] @relation("RegLinkCreatedBy")
+  registrationLinksReviewed RegistrationLink[] @relation("RegLinkReviewedBy")
+
+  @@map("users")
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String
+  code        String           @unique // SUPER_ADMIN, ADMIN, TEAM_LEADER, EXECUTIVE, HR_MANAGER, etc.
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  name        String
+  category    String           // LEADS, CALLS, USER_MANAGEMENT, TEAMS, CLIENTS, JOBS, COMMUNICATIONS, DOCUMENTS, REGISTRATION, REPORTS, SYSTEM
+  description String?
+  createdAt   DateTime         @default(now())
+
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ----------------------------------------------------
+// CANDIDATE SELF-SERVICE REGISTRATION MODELS
+// ----------------------------------------------------
+
+model RegistrationLink {
+  id              String      @id @default(uuid())
+  token           String      @unique
+  candidateId     String
+  jobOrderId      String?
+  createdById     String
+  status          String      @default("ACTIVE") // ACTIVE, DRAFT, SUBMITTED, UNDER_REVIEW, APPROVED, CORRECTION_REQUIRED, REJECTED, EXPIRED, DISABLED
+  expiresAt       DateTime
+  usedAt          DateTime?
+  stepCompleted   Int         @default(1)
+  draftData       String?     // JSON string storing draft inputs
+  submittedData   String?     // JSON string storing finalized submission data
+  reviewNotes     String?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  candidate       Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOrder        JobOrder?   @relation(fields: [jobOrderId], references: [id])
+  createdBy       User        @relation("RegLinkCreatedBy", fields: [createdById], references: [id])
+  reviewedBy      User?       @relation("RegLinkReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([token])
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("registration_links")
+}
+
+// ----------------------------------------------------
+// DOCUMENT & CV MANAGEMENT MODELS
+// ----------------------------------------------------
+
+model CandidateDocument {
+  id                  String            @id @default(uuid())
+  candidateId         String
+  jobOrderId          String?
+  applicationId       String?
+  clientId            String?
+  documentType        String            // CV_RESUME, UPDATED_CV, AADHAAR_ID, PAN_TAX, EDUCATION_CERT, EXPERIENCE_CERT, SALARY_SLIP, OFFER_LETTER, PHOTO, DRIVING_LICENSE, OTHER
+  documentCategory    String?
+  originalFileName    String
+  storedFileName      String
+  mimeType            String
+  fileSizeBytes       Int
+  storageProvider     String            @default("LOCAL") // LOCAL, S3, R2, SUPABASE
+  storageKey          String
+  versionNumber       Int               @default(1)
+  isCurrentVersion    Boolean           @default(true)
+  uploadedById        String
+  verificationStatus  String            @default("PENDING") // PENDING, RECEIVED, VERIFIED, REJECTED, REUPLOAD_REQUIRED
+  verifiedById        String?
+  verifiedAt          DateTime?
+  verificationRemarks String?
+  notes               String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  candidate           Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  uploadedBy          User              @relation("DocUploadedBy", fields: [uploadedById], references: [id])
+  verifiedBy          User?             @relation("DocVerifiedBy", fields: [verifiedById], references: [id])
+  jobOrder            JobOrder?         @relation(fields: [jobOrderId], references: [id])
+  application         CandidateJobApplication? @relation(fields: [applicationId], references: [id])
+  client              Client?           @relation(fields: [clientId], references: [id])
+  submissions         CandidateSubmission[]
+
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([documentType])
+  @@index([verificationStatus])
+  @@index([isCurrentVersion])
+  @@index([uploadedById])
+  @@index([createdAt])
+  @@map("candidate_documents")
+}
+
+// ----------------------------------------------------
+// COMMUNICATION CENTER & WHATSAPP MODELS
+// ----------------------------------------------------
+
+model MessageTemplate {
+  id              String                  @id @default(uuid())
+  name            String
+  category        String                  // GENERAL_INTRO, JOB_OPPORTUNITY, GOOGLE_FORM, REGISTRATION_FORM, CV_REQUEST, CALLBACK_REMINDER, INTERVIEW_INVITATION, INTERVIEW_REMINDER, SELECTION_UPDATE, JOINING_REMINDER, CUSTOM
+  subject         String?
+  bodyText        String
+  variables       String?                 // e.g. {{candidateName}}, {{jobTitle}}, {{companyName}}, {{jobLocation}}, {{salary}}, {{googleFormLink}}, {{executiveName}}
+  isActive        Boolean                 @default(true)
+  createdById     String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  createdBy       User?                   @relation("TemplateCreatedBy", fields: [createdById], references: [id])
+  communications  CommunicationActivity[]
+
+  @@index([category])
+  @@index([isActive])
+  @@map("message_templates")
+}
+
+model CommunicationActivity {
+  id                String            @id @default(uuid())
+  candidateId       String
+  userId            String
+  jobOrderId        String?
+  clientId          String?
+  channel           String            @default("WHATSAPP") // WHATSAPP, EMAIL, SMS, CALL, NOTE
+  communicationType String            // GENERAL_INTRO, JOB_OPPORTUNITY, GOOGLE_FORM, REGISTRATION_FORM, CV_REQUEST, CALLBACK_REMINDER, CUSTOM_NOTE
+  templateId        String?
+  messageContent    String
+  recipientPhone    String?
+  recipientEmail    String?
+
+  // Future WhatsApp Cloud API Readiness
+  provider          String            @default("WHATSAPP_WEB") // WHATSAPP_WEB, CLOUD_API, TWILIO, GUPSHUP
+  externalMessageId String?
+  deliveryStatus    String            @default("INITIATED")    // INITIATED, QUEUED, SENT, DELIVERED, READ, FAILED
+  sentAt            DateTime          @default(now())
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  notes             String?
+  createdAt         DateTime          @default(now())
+
+  candidate         Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user              User              @relation("CommInitiatedBy", fields: [userId], references: [id])
+  jobOrder          JobOrder?         @relation(fields: [jobOrderId], references: [id])
+  client            Client?           @relation(fields: [clientId], references: [id])
+  template          MessageTemplate?  @relation(fields: [templateId], references: [id])
+
+  @@index([candidateId])
+  @@index([userId])
+  @@index([jobOrderId])
+  @@index([clientId])
+  @@index([channel])
+  @@index([communicationType])
+  @@index([deliveryStatus])
+  @@index([createdAt])
+  @@map("communication_activities")
+}
+
+model CandidateFormTracking {
+  id              String      @id @default(uuid())
+  candidateId     String
+  jobOrderId      String?
+  formName        String      @default("Genius Candidate Google Form")
+  formUrl         String
+  sentById        String
+  sentDate        DateTime    @default(now())
+  status          String      @default("SENT") // NOT_SENT, SENT, COMPLETED
+  completedDate   DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  candidate       Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOrder        JobOrder?   @relation(fields: [jobOrderId], references: [id])
+  sentBy          User        @relation("FormSentBy", fields: [sentById], references: [id])
+
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([status])
+  @@map("candidate_form_trackings")
+}
+
+model CommunicationReminder {
+  id              String      @id @default(uuid())
+  candidateId     String
+  userId          String
+  jobOrderId      String?
+  reminderType    String      // CV_REMINDER, FORM_REMINDER, CALLBACK_REMINDER, DOCUMENT_REMINDER
+  dueDate         String      // YYYY-MM-DD
+  dueTime         String?     // HH:mm
+  status          String      @default("PENDING") // PENDING, SENT, DISMISSED
+  reminderCount   Int         @default(1)
+  lastReminderAt  DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  candidate       Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user            User        @relation("ReminderUser", fields: [userId], references: [id])
+  jobOrder        JobOrder?   @relation(fields: [jobOrderId], references: [id])
+
+  @@index([candidateId])
+  @@index([userId])
+  @@index([dueDate])
+  @@index([status])
+  @@map("communication_reminders")
+}
+
+// ----------------------------------------------------
+// TEAM & COACHING WORKFLOW MODELS
+// ----------------------------------------------------
+
+model Team {
+  id            String            @id @default(uuid())
+  teamName      String
+  teamLeaderId  String
+  status        String            @default("ACTIVE") // ACTIVE, INACTIVE
+  createdById   String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  teamLeader    User              @relation("TeamLeader", fields: [teamLeaderId], references: [id])
+  createdBy     User?             @relation("TeamCreator", fields: [createdById], references: [id])
+  memberships   TeamMembership[]
+  coachingNotes CoachingNote[]
+
+  @@index([teamLeaderId])
+  @@index([status])
+  @@map("teams")
+}
+
+model TeamMembership {
+  id        String    @id @default(uuid())
+  teamId    String
+  userId    String
+  status    String    @default("ACTIVE") // ACTIVE, INACTIVE
+  joinedAt  DateTime  @default(now())
+  leftAt    DateTime?
+
+  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([teamId])
+  @@index([userId])
+  @@index([status])
+  @@map("team_memberships")
+}
+
+model CoachingNote {
+  id            String    @id @default(uuid())
+  executiveId   String
+  teamLeaderId  String
+  teamId        String?
+  note          String
+  category      String    @default("PERFORMANCE") // PERFORMANCE, COACHING, ATTENDANCE, QUALITY, GENERAL
+  visibility    String    @default("VISIBLE_TO_EXECUTIVE") // PRIVATE_TO_MANAGERS, VISIBLE_TO_EXECUTIVE
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  executive     User      @relation("CoachingNoteExec", fields: [executiveId], references: [id], onDelete: Cascade)
+  teamLeader    User      @relation("CoachingNoteLeader", fields: [teamLeaderId], references: [id])
+  team          Team?     @relation(fields: [teamId], references: [id])
+
+  @@index([executiveId])
+  @@index([teamLeaderId])
+  @@index([teamId])
+  @@map("coaching_notes")
+}
+
+// ----------------------------------------------------
+// CORPORATE CLIENT MASTER & COMPANY REQUIREMENTS
+// ----------------------------------------------------
+
+model Client {
+  id                      String      @id @default(uuid())
+  displayClientId         String      @unique // e.g. GC-CLI-001
+  companyName             String
+  companyLogo             String?
+  industry                String      // Automobile, IT, BFSI, Retail, Manufacturing, Logistics, Healthcare, E-Commerce, Hospitality, Other
+  companyWebsite          String?
+  companyAddress          String?
+  city                    String?
+  state                   String?
+  country                 String?     @default("India")
+  
+  // Primary Contact Person
+  contactPersonName       String
+  designation             String?
+  mobileNumber            String
+  whatsappNumber          String?
+  email                   String
+  
+  // Additional Contacts
+  secondaryContactPerson  String?
+  secondaryContactNumber  String?
+  hrContact               String?
+  recruitmentContact      String?
+  
+  // Commercial Details
+  recruitmentFeeType      String      @default("PERCENTAGE") // PERCENTAGE, FIXED, RETAINER
+  feeAmountOrPercent      Float       @default(8.33)
+  paymentTerms            String?     @default("30 Days from Date of Joining")
+  invoiceTerms            String?
+  replacementPeriodDays   Int         @default(90)
+  
+  status                  String      @default("ACTIVE") // ACTIVE, INACTIVE, BLACKLISTED
+  createdById             String?
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  createdBy               User?       @relation("ClientCreatedBy", fields: [createdById], references: [id])
+  jobOrders               JobOrder[]
+  submissions             CandidateSubmission[]
+  placements              Placement[]
+  shortlistRecords        ShortlistRecord[]
+  communications          CommunicationActivity[]
+  documents               CandidateDocument[]
+
+  @@index([companyName])
+  @@index([industry])
+  @@index([status])
+  @@map("clients")
+}
+
+model JobOrder {
+  id                      String      @id @default(uuid())
+  displayJobId            String      @unique // e.g. GC-JOB-001
+  clientId                String
+  jobTitle                String
+  department              String?
+  clientContactPerson     String?
+  jobLocation             String
+  numberOfVacancies       Int         @default(1)
+  employmentType          String      @default("FULL_TIME") // FULL_TIME, CONTRACT, INTERNSHIP, PART_TIME
+  jobDescription          String?
+  requiredSkills          String?
+  requiredEducation       String?
+  minExperienceYears      Float       @default(0)
+  maxExperienceYears      Float       @default(10)
+  
+  // Salary
+  minSalary               Float?
+  maxSalary               Float?
+  salaryType              String      @default("ANNUAL_CTC") // ANNUAL_CTC, MONTHLY_IN_HAND
+  incentives              String?
+  
+  // Google Form link for candidate outreach
+  googleFormUrl           String?     @default("https://forms.gle/genius-consultants-candidate-form")
+  
+  // HR Details for submission
+  hrContactName           String?
+  hrContactPhone          String?
+  hrContactWhatsapp       String?
+  hrContactEmail          String?
+  
+  // Eligibility Criteria
+  minAge                  Int?
+  maxAge                  Int?
+  genderPreference        String?     @default("ANY") // ANY, MALE, FEMALE
+  twoWheelerRequired      Boolean     @default(false)
+  drivingLicenseRequired  Boolean     @default(false)
+  fieldSalesRequired      Boolean     @default(false)
+  automobileExpRequired   Boolean     @default(false)
+  languagesRequired       String?
+  
+  // Requirement Tracking
+  jobOrderDate            DateTime    @default(now())
+  deadline                DateTime?
+  priority                String      @default("MEDIUM") // HIGH, MEDIUM, LOW, URGENT
+  assignedManagerId       String?
+  targetCandidates        Int         @default(50)
+  status                  String      @default("OPEN") // DRAFT, OPEN, ON_HOLD, CLOSED, CANCELLED
+  closedDate              DateTime?
+  closureReason           String?
+  finalNumberJoined       Int         @default(0)
+  
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  client                  Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assignedManager         User?       @relation("JobOrderManager", fields: [assignedManagerId], references: [id])
+  
+  applications            CandidateJobApplication[]
+  submissions             CandidateSubmission[]
+  interviews              Interview[]
+  placements              Placement[]
+  callActivities          CallActivity[]
+  shortlistRecords        ShortlistRecord[]
+  communications          CommunicationActivity[]
+  formTrackings           CandidateFormTracking[]
+  reminders               CommunicationReminder[]
+  documents               CandidateDocument[]
+  registrationLinks       RegistrationLink[]
+
+  @@index([clientId])
+  @@index([jobTitle])
+  @@index([status])
+  @@index([jobLocation])
+  @@index([priority])
+  @@map("job_orders")
+}
+
+model CandidateJobApplication {
+  id                  String      @id @default(uuid())
+  candidateId         String
+  jobOrderId          String
+  assignedExecutiveId String?
+  addedById           String?
+  
+  // Job-Specific Application Stage Pipeline
+  applicationStage    String      @default("SHORTLISTED") // SHORTLISTED, FORM_SENT, FORM_COMPLETED, CV_REQUESTED, CV_RECEIVED, READY_TO_SEND, SENT_TO_HR, COMPLETED
+  stageNotes          String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  candidate           Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOrder            JobOrder    @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  assignedExecutive   User?       @relation("JobAppAssignedExec", fields: [assignedExecutiveId], references: [id])
+  addedBy             User?       @relation("JobAppAddedBy", fields: [addedById], references: [id])
+  
+  submissions         CandidateSubmission[]
+  interviews          Interview[]
+  placements          Placement[]
+  documents           CandidateDocument[]
+
+  @@unique([candidateId, jobOrderId])
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([applicationStage])
+  @@index([assignedExecutiveId])
+  @@map("candidate_job_applications")
+}
+
+model CandidateSubmission {
+  id              String      @id @default(uuid())
+  applicationId   String
+  candidateId     String
+  jobOrderId      String
+  clientId        String
+  documentId      String?
+  cvVersionNumber Int?
+  submittedById   String
+  submissionDate  DateTime    @default(now())
+  submissionMethod String     @default("WHATSAPP") // WHATSAPP, EMAIL, MANUAL
+  hrContactName   String?
+  hrContactPhone  String?
+  hrContactEmail  String?
+  cvFileName      String?
+  notes           String?
+  status          String      @default("SENT_TO_HR") // SENT_TO_HR, COMPLETED
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  application     CandidateJobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate       Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOrder        JobOrder    @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  client          Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  document        CandidateDocument? @relation(fields: [documentId], references: [id])
+  submittedBy     User        @relation("SubmissionSubmittedBy", fields: [submittedById], references: [id])
+
+  @@index([applicationId])
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([clientId])
+  @@index([documentId])
+  @@map("candidate_submissions")
+}
+
+model Interview {
+  id                      String      @id @default(uuid())
+  applicationId           String
+  candidateId             String
+  jobOrderId              String
+  scheduledById           String
+  interviewDate           String      // YYYY-MM-DD
+  interviewTime           String      // HH:mm
+  roundNumber             Int         @default(1)
+  interviewType           String      @default("IN_PERSON") // IN_PERSON, VIDEO_CALL, TELEPHONIC
+  locationOrLink          String?
+  interviewerName         String?
+  interviewerDesignation  String?
+  result                  String      @default("PENDING") // PENDING, SELECTED, REJECTED, NO_SHOW, RESCHEDULE
+  remarks                 String?
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  application             CandidateJobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate               Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOrder                JobOrder    @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  scheduledBy             User        @relation("InterviewScheduledBy", fields: [scheduledById], references: [id])
+
+  @@index([applicationId])
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([interviewDate])
+  @@index([result])
+  @@map("interviews")
+}
+
+model Placement {
+  id                          String      @id @default(uuid())
+  applicationId               String
+  candidateId                 String
+  jobOrderId                  String
+  clientId                    String
+  placedById                  String
+  selectionDate               DateTime    @default(now())
+  joiningDate                 DateTime?
+  offeredSalary               Float?
+  finalSalary                 Float?
+  placementFee                Float?
+  replacementPeriodEndDate    DateTime?
+  status                      String      @default("SELECTED") // SELECTED, JOINED, DROPPED_AFTER_SELECTION
+  notes                       String?
+  createdAt                   DateTime    @default(now())
+  updatedAt                   DateTime    @updatedAt
+
+  application                 CandidateJobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate                   Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOrder                    JobOrder    @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  client                      Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  placedBy                    User        @relation("PlacementRecordedBy", fields: [placedById], references: [id])
+
+  @@index([applicationId])
+  @@index([candidateId])
+  @@index([jobOrderId])
+  @@index([clientId])
+  @@index([status])
+  @@map("placements")
+}
+
+// ----------------------------------------------------
+// CANDIDATE MASTER & CORE TELECALLING MODELS
+// ----------------------------------------------------
+
+model ImportBatch {
+  id             String      @id @default(uuid())
+  batchName      String
+  fileName       String
+  importedById   String
+  totalRows      Int         @default(0)
+  validCount     Int         @default(0)
+  duplicateCount Int         @default(0)
+  invalidCount   Int         @default(0)
+  createdAt      DateTime    @default(now())
+
+  importedBy     User        @relation(fields: [importedById], references: [id])
+  candidates     Candidate[]
+
+  @@map("import_batches")
+}
+
+model Candidate {
+  id                    String            @id @default(uuid())
+  displaySlNo           String            @unique
+  importBatchId         String?
+  assignedExecutiveId   String?
+  leadOwnerId           String?
+  leadStage             String            @default("NEW")
+  leadPriorityScore     Int               @default(50)
+  dataQualityScore      Int               @default(100)
+  isDeleted             Boolean           @default(false)
+  deletedAt             DateTime?
+  
+  // Basic Details
+  name                  String
+  primaryPhone          String
+  secondaryPhone        String?
+  whatsappNumber        String?
+  email                 String?
+  age                   Int?
+  gender                String?
+  currentLocation       String?
+  nativeLocation        String?
+
+  // Professional Details
+  education             String?
+  totalExperienceYears  Float             @default(0)
+  currentJobTitle       String?
+  currentCompany        String?
+  previousCompany       String?
+  skills                String?
+  languages             String?
+
+  // Job Requirements
+  currentSalary         String?
+  expectedSalary        String?
+  appliedLocation       String?
+  preferredLocations    String?
+  noticePeriod          String?
+
+  // Eligibility
+  hasTwoWheeler         Boolean           @default(false)
+  hasDrivingLicense     Boolean           @default(false)
+  interestedInFieldSales Boolean          @default(false)
+  interestedInAutomobile Boolean          @default(false)
+  customEligibility     String?
+
+  // Source & Notes
+  leadSource            String            @default("WorkIndia")
+  generalNotes          String?
+  managerNotes          String?
+
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  importBatch           ImportBatch?      @relation(fields: [importBatchId], references: [id])
+  assignedExecutive     User?             @relation("AssignedExecutive", fields: [assignedExecutiveId], references: [id])
+  leadOwner             User?             @relation("LeadOwner", fields: [leadOwnerId], references: [id])
+  callActivities        CallActivity[]
+  callbacks             Callback[]
+  shortlistRecord       ShortlistRecord?
+  leadAssignments       LeadAssignment[]
+  activityLogs          ActivityLog[]
+
+  // Job Application relations
+  jobApplications       CandidateJobApplication[]
+  submissions           CandidateSubmission[]
+  interviews            Interview[]
+  placements            Placement[]
+  
+  // Communication relations
+  communications        CommunicationActivity[]
+  formTrackings         CandidateFormTracking[]
+  reminders             CommunicationReminder[]
+
+  // Document relations
+  documents             CandidateDocument[]
+
+  // Registration links
+  registrationLinks     RegistrationLink[]
+
+  @@index([primaryPhone])
+  @@index([assignedExecutiveId])
+  @@index([leadStage])
+  @@index([currentLocation])
+  @@index([createdAt])
+  @@map("candidates")
+}
+
+model CallActivity {
+  id              String      @id @default(uuid())
+  candidateId     String
+  executiveId     String
+  jobOrderId      String?
+  callDate        String      // YYYY-MM-DD
+  callTime        String      // HH:mm:ss
+  outcome         String      // CALL_DONE, NO_ANSWER, RNR, WRONG_NUMBER, NOT_INTERESTED, NOT_ELIGIBLE, INTERESTED, CALLBACK, SHORTLISTED
+  remarks         String?
+  durationSeconds Int         @default(0)
+  createdAt       DateTime    @default(now())
+
+  candidate       Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  executive       User        @relation(fields: [executiveId], references: [id])
+  jobOrder        JobOrder?   @relation(fields: [jobOrderId], references: [id])
+  callbacks       Callback[]
+
+  @@index([candidateId])
+  @@index([executiveId])
+  @@index([jobOrderId])
+  @@index([callDate])
+  @@index([outcome])
+  @@map("call_activities")
+}
+
+model Callback {
+  id              String        @id @default(uuid())
+  candidateId     String
+  executiveId     String
+  callActivityId  String?
+  callbackDate    String        // YYYY-MM-DD
+  callbackTime    String        // HH:mm
+  priority        String        @default("MEDIUM")
+  status          String        @default("PENDING")
+  cancelReason    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  candidate       Candidate     @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  executive       User          @relation(fields: [executiveId], references: [id])
+  callActivity    CallActivity? @relation(fields: [callActivityId], references: [id])
+
+  @@index([candidateId])
+  @@index([executiveId])
+  @@index([callbackDate])
+  @@index([status])
+  @@map("callbacks")
+}
+
+model ShortlistRecord {
+  id                 String     @id @default(uuid())
+  candidateId        String     @unique
+  jobOrderId         String?
+  clientId           String?
+  shortlistedById    String
+  formFilled         String     @default("PENDING") // PENDING, SENT, COMPLETED
+  cvReceivedWhatsapp String     @default("PENDING") // PENDING, REQUESTED, RECEIVED, UPLOADED
+  shortlistStatus    String     @default("SHORTLISTED") // SHORTLISTED, FORM_SENT, FORM_COMPLETED, CV_REQUESTED, CV_RECEIVED, READY_TO_SEND, SENT_TO_HR, COMPLETED, REJECTED
+  clientName         String?
+  jobRole            String?
+  remarks            String?
+  
+  // Real Workflow Checklist Timestamps
+  googleFormUrl      String?
+  formSentAt         DateTime?
+  formCompletedAt    DateTime?
+  cvRequestedAt      DateTime?
+  cvReceivedAt       DateTime?
+  readyToSendAt      DateTime?
+  sentToHrAt         DateTime?
+  
+  shortlistedAt      DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  candidate          Candidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  shortlistedBy      User       @relation("ShortlistedBy", fields: [shortlistedById], references: [id])
+  jobOrder           JobOrder?  @relation(fields: [jobOrderId], references: [id])
+  client             Client?    @relation(fields: [clientId], references: [id])
+
+  @@index([shortlistStatus])
+  @@index([formFilled])
+  @@index([cvReceivedWhatsapp])
+  @@index([jobOrderId])
+  @@index([clientId])
+  @@map("shortlist_records")
+}
+
+model LeadAssignment {
+  id                  String    @id @default(uuid())
+  candidateId         String
+  assignedById        String
+  assignedToId        String
+  previousExecutiveId String?
+  assignmentMode      String    @default("MANUAL")
+  assignedAt          DateTime  @default(now())
+
+  candidate           Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  assignedBy          User      @relation("AssignedBy", fields: [assignedById], references: [id])
+  assignedTo          User      @relation("AssignedTo", fields: [assignedToId], references: [id])
+
+  @@index([candidateId])
+  @@index([assignedToId])
+  @@map("lead_assignments")
+}
+
+model DailyCallingSummary {
+  id                  String    @id @default(uuid())
+  date                String    // YYYY-MM-DD
+  executiveId         String
+  assignedLeadsCount  Int       @default(0)
+  uniqueCalledCount   Int       @default(0)
+  totalAttemptsCount  Int       @default(0)
+  confirmedCount      Int       @default(0)
+  shortlistedCount    Int       @default(0)
+  formsSentCount      Int       @default(0)
+  formsCompletedCount Int       @default(0)
+  cvReceivedCount     Int       @default(0)
+  sentToHrCount       Int       @default(0)
+  notInterestedCount  Int       @default(0)
+  rnrCount            Int       @default(0)
+  busyCallbackCount   Int       @default(0)
+  wrongNumberCount    Int       @default(0)
+  pendingCount        Int       @default(0)
+  conversionRate      Float     @default(0.0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  executive           User      @relation(fields: [executiveId], references: [id])
+
+  @@unique([date, executiveId])
+  @@index([date])
+  @@index([executiveId])
+  @@map("daily_calling_summaries")
+}
+
+model ActivityLog {
+  id          String     @id @default(uuid())
+  userId      String?
+  candidateId String?
+  action      String
+  details     String?
+  oldValue    String?
+  newValue    String?
+  ipAddress   String?
+  createdAt   DateTime   @default(now())
+
+  user        User?      @relation(fields: [userId], references: [id])
+  candidate   Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model Notification {
+  id          String     @id @default(uuid())
+  userId      String
+  type        String     @default("SYSTEM") // LEAD_ASSIGNED, LEAD_REASSIGNED, CALLBACK_DUE, CALLBACK_OVERDUE, CANDIDATE_SHORTLISTED, FORM_SENT, FORM_COMPLETED, CV_REQUESTED, CV_RECEIVED, CANDIDATE_READY_TO_SEND, CANDIDATE_SENT_TO_HR, DOCUMENT_UPLOADED, DOCUMENT_VERIFIED, COACHING_NOTE, SYSTEM
+  title       String
+  message     String
+  entityType  String?    // CANDIDATE, JOB_ORDER, CALLBACK, SHORTLIST, DOCUMENT, SYSTEM
+  entityId    String?
+  isRead      Boolean    @default(false)
+  readAt      DateTime?
+  createdAt   DateTime   @default(now())
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model StatusDefinition {
+  id           String   @id @default(uuid())
+  category     String   // CALL_OUTCOME, SHORTLIST_STATUS, LEAD_STAGE, APPLICATION_STAGE, DOCUMENT_STATUS
+  code         String   @unique
+  label        String
+  color        String
+  badgeVariant String   @default("default")
+  isSystem     Boolean  @default(true)
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+
+  @@index([category])
+  @@map("status_definitions")
+}

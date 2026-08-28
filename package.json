@@ -1,0 +1,15 @@
+{
+  "name": "genius-consultants-crm",
+  "version": "1.0.0",
+  "description": "Genius Consultants - Telecalling Operations Portal",
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "cd server && npm run build && cd ../client && npm run build",
+    "db:push": "cd server && npm run db:push",
+    "db:seed": "cd server && npm run db:seed"
+  },
+  "keywords": ["crm", "telecalling", "recruitment", "portal"],
+  "author": "Genius Consultants",
+  "license": "ISC"
+}
