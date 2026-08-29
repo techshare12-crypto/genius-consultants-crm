@@ -2,7 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../prisma/client';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'genius_consultants_crm_secret_key_2026_super_secure';
+export const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  'genius_consultants_crm_secret_key_2026_super_secure';
 
 export interface AuthUser {
   id: string;
@@ -13,33 +15,72 @@ export interface AuthUser {
   permissions: string[];
 }
 
-export interface AuthenticatedRequest extends Request {
+export interface AuthenticatedRequest<
+  P = any,
+  ResBody = any,
+  ReqBody = any,
+  ReqQuery = any
+> extends Request<P, ResBody, ReqBody, ReqQuery> {
   user?: AuthUser;
 }
 
-export function generateToken(user: { id: string; name: string; email: string; role: string; username?: string | null }): string {
+export function generateToken(
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    username?: string | null;
+  }
+): string {
   return jwt.sign(
-    { id: user.id, name: user.name, email: user.email, role: user.role, username: user.username },
+    {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      username: user.username,
+    },
     JWT_SECRET,
-    { expiresIn: '7d' }
+    {
+      expiresIn: '7d',
+    }
   );
 }
 
-export async function authenticate(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+export async function authenticate(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
   const authHeader = req.headers.authorization;
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
+    return res.status(401).json({
+      error: 'Unauthorized: Missing or invalid token',
+    });
   }
 
   const token = authHeader.split(' ')[1];
+
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
-    
-    // Verify user exists and status
+    const decoded = jwt.verify(
+      token,
+      JWT_SECRET
+    ) as {
+      id: string;
+      name: string;
+      email: string;
+      role: string;
+      username?: string | null;
+    };
+
     const user = await prisma.user.findUnique({
-      where: { id: decoded.id },
+      where: {
+        id: decoded.id,
+      },
       include: {
-        roleRel: {
+        role: {
           include: {
             permissions: {
               include: {
@@ -52,84 +93,77 @@ export async function authenticate(req: AuthenticatedRequest, res: Response, nex
     });
 
     if (!user) {
-      return res.status(401).json({ error: 'User account not found' });
+      return res.status(401).json({
+        error: 'Unauthorized: User not found',
+      });
     }
 
-    if (user.status === 'DEACTIVATED') {
-      return res.status(403).json({ error: 'Your account has been deactivated. Please contact Super Admin.' });
-    }
-
-    if (user.status === 'INACTIVE') {
-      return res.status(403).json({ error: 'Your account is currently inactive. Please contact Administrator.' });
-    }
-
-    // Extract dynamic permission codes
-    const permissions: string[] = [];
-    if (user.role === 'SUPER_ADMIN') {
-      // Super Admin has all permissions implicitly
-      permissions.push('*');
-    } else if (user.roleRel?.permissions) {
-      for (const rp of user.roleRel.permissions) {
-        if (rp.permission?.code) {
-          permissions.push(rp.permission.code);
-        }
-      }
-    }
+    const permissions =
+      user.role?.permissions?.map((rp) => rp.permission.code) || [];
 
     req.user = {
       id: user.id,
       name: user.name,
       username: user.username,
       email: user.email,
-      role: user.role,
+      role: user.role?.code || user.role?.name || decoded.role,
       permissions,
     };
 
     next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
+  } catch (error) {
+    console.error('Authentication error:', error);
+
+    return res.status(401).json({
+      error: 'Unauthorized: Invalid or expired token',
+    });
   }
 }
 
-/**
- * Middleware requiring specific roles
- */
-export function requireRoles(...roles: string[]) {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export function requireRoles(...allowedRoles: string[]) {
+  return (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ) => {
     if (!req.user) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return res.status(401).json({
+        error: 'Unauthorized',
+      });
     }
 
-    // SUPER_ADMIN has access to everything
-    if (req.user.role === 'SUPER_ADMIN') {
-      return next();
-    }
-
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Forbidden: Insufficient permissions for this action' });
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        error: 'Forbidden: Insufficient role permissions',
+      });
     }
 
     next();
   };
 }
 
-/**
- * Middleware requiring dynamic permission codes
- */
-export function requirePermission(...permissionCodes: string[]) {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export function requirePermission(...requiredPermissions: string[]) {
+  return (
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ) => {
     if (!req.user) {
-      return res.status(401).json({ error: 'Unauthorized' });
+      return res.status(401).json({
+        error: 'Unauthorized',
+      });
     }
 
-    // SUPER_ADMIN has full bypass
-    if (req.user.role === 'SUPER_ADMIN' || req.user.permissions.includes('*')) {
-      return next();
-    }
+    const userPermissions = req.user.permissions || [];
 
-    const hasAny = permissionCodes.some(code => req.user!.permissions.includes(code));
-    if (!hasAny) {
-      return res.status(403).json({ error: `Forbidden: Missing required permission [${permissionCodes.join(', ')}]` });
+    const hasPermission = requiredPermissions.some((permission) =>
+      userPermissions.includes(permission)
+    );
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        error: 'Forbidden: You do not have the required permission',
+      });
     }
 
     next();
