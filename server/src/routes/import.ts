@@ -161,7 +161,9 @@ router.post('/execute', authenticate, requireRoles('ADMIN', 'SUPER_ADMIN'), asyn
       where: { isDeleted: false },
       select: { id: true, primaryPhone: true, name: true },
     });
-    const existingPhoneMap = new Map(allExistingCandidates.map(c => [c.primaryPhone, c]));
+    const existingPhoneMap = new Map<string, (typeof allExistingCandidates)[number]>(
+  allExistingCandidates.map(c => [c.primaryPhone, c] as [string, (typeof allExistingCandidates)[number]])
+);
 
     for (const row of rows) {
       const rawName = String(row[nameCol] || '').trim();

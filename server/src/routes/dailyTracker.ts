@@ -133,7 +133,9 @@ router.get('/performance', authenticate, async (req: AuthenticatedRequest, res: 
     const todaySummaries = await prisma.dailyCallingSummary.findMany({
       where: { date: today },
     });
-    const todayMap = new Map(todaySummaries.map(s => [s.executiveId, s]));
+    const todayMap = new Map<string, (typeof todaySummaries)[number]>(
+  todaySummaries.map(s => [s.executiveId, s] as [string, (typeof todaySummaries)[number]])
+);
 
     // Monthly stats per executive
     const monthlySummaries = await prisma.dailyCallingSummary.findMany({
