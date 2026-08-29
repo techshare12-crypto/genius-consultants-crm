@@ -15,24 +15,18 @@ export interface AuthUser {
   permissions: string[];
 }
 
-export interface AuthenticatedRequest<
-  P = any,
-  ResBody = any,
-  ReqBody = any,
-  ReqQuery = any
-> extends Request<P, ResBody, ReqBody, ReqQuery> {
+export interface AuthenticatedRequest
+  extends Request<any, any, any, any> {
   user?: AuthUser;
 }
 
-export function generateToken(
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: string;
-    username?: string | null;
-  }
-): string {
+export function generateToken(user: {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  username?: string | null;
+}): string {
   return jwt.sign(
     {
       id: user.id,
@@ -64,31 +58,13 @@ export async function authenticate(
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(
-      token,
-      JWT_SECRET
-    ) as {
+    const decoded = jwt.verify(token, JWT_SECRET) as {
       id: string;
-      name: string;
-      email: string;
-      role: string;
-      username?: string | null;
     };
 
     const user = await prisma.user.findUnique({
       where: {
         id: decoded.id,
-      },
-      include: {
-        role: {
-          include: {
-            permissions: {
-              include: {
-                permission: true,
-              },
-            },
-          },
-        },
       },
     });
 
@@ -98,22 +74,17 @@ export async function authenticate(
       });
     }
 
-    const permissions =
-      user.role?.permissions?.map((rp) => rp.permission.code) || [];
-
     req.user = {
       id: user.id,
       name: user.name,
       username: user.username,
       email: user.email,
-      role: user.role?.code || user.role?.name || decoded.role,
-      permissions,
+      role: user.role,
+      permissions: [],
     };
 
     next();
   } catch (error) {
-    console.error('Authentication error:', error);
-
     return res.status(401).json({
       error: 'Unauthorized: Invalid or expired token',
     });
@@ -134,7 +105,7 @@ export function requireRoles(...allowedRoles: string[]) {
 
     if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
-        error: 'Forbidden: Insufficient role permissions',
+        error: 'Forbidden: You do not have permission to access this resource',
       });
     }
 
@@ -154,15 +125,13 @@ export function requirePermission(...requiredPermissions: string[]) {
       });
     }
 
-    const userPermissions = req.user.permissions || [];
-
     const hasPermission = requiredPermissions.some((permission) =>
-      userPermissions.includes(permission)
+      req.user?.permissions.includes(permission)
     );
 
     if (!hasPermission) {
       return res.status(403).json({
-        error: 'Forbidden: You do not have the required permission',
+        error: 'Forbidden: Required permission not available',
       });
     }
 
