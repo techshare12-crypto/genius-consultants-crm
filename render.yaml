@@ -22,7 +22,6 @@ services:
     name: genius-consultants-api
     runtime: node
     plan: free
-    region: singapore
     rootDir: server
     buildCommand: npm install && npm run prisma:generate && npm run build
     startCommand: npm run prisma:push && npm run start
