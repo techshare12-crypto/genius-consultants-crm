@@ -1,0 +1,434 @@
+import * as XLSX from 'xlsx';
+import { prisma } from '@/server/db/prisma';
+import { normalizeIndianPhone } from '@/server/utils/phone';
+import { AuditService } from '@/server/services/AuditService';
+
+export interface DuplicateCandidateMatch {
+  row: number;
+  candidateName: string;
+  phone: string;
+  email?: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  duplicateType:
+    | 'DUPLICATE_HIGH_PHONE'
+    | 'DUPLICATE_HIGH_EMAIL'
+    | 'DUPLICATE_MEDIUM_PHONE_NAME'
+    | 'DUPLICATE_MEDIUM_EMAIL_NAME'
+    | 'DUPLICATE_LOW_NAME_LOCATION'
+    | 'DUPLICATE_LOW_NAME_EDUCATION';
+  matchReason: string;
+}
+
+export interface ParseResult {
+  filename: string;
+  detectedSheets: string[];
+  totalRows: number;
+  previewRows: Array<Record<string, any>>;
+  highConfidenceDuplicates: DuplicateCandidateMatch[];
+  mediumConfidenceDuplicates: DuplicateCandidateMatch[];
+  lowConfidenceDuplicates: DuplicateCandidateMatch[];
+  summary: {
+    newCandidates: number;
+    existingCandidates: number;
+    potentialDuplicates: number;
+    applicationsToCreate: number;
+    shortlistedToEnrich: number;
+  };
+}
+
+export class ImportService {
+  /**
+   * Parses an Excel buffer, detects known operational sheets,
+   * performs full 6-tier reconciliation analysis, and returns a preview without committing.
+   */
+  static parseWorkbookBuffer(buffer: Buffer, filename: string): ParseResult {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const detectedSheets = workbook.SheetNames;
+
+    let candidateMasterData: any[] = [];
+    let dashboardData: any[] = [];
+    let shortlistedData: any[] = [];
+
+    // 1. Detect CANDIDATE MASTER
+    const cmSheetName = detectedSheets.find((s) => /candidate\s*master/i.test(s)) || detectedSheets[0];
+    if (cmSheetName && workbook.Sheets[cmSheetName]) {
+      candidateMasterData = XLSX.utils.sheet_to_json(workbook.Sheets[cmSheetName], { defval: '' });
+    }
+
+    // 2. Detect DASHBOARD sheet
+    const dashSheetName = detectedSheets.find((s) => /dashboard/i.test(s));
+    if (dashSheetName && workbook.Sheets[dashSheetName]) {
+      dashboardData = XLSX.utils.sheet_to_json(workbook.Sheets[dashSheetName], { defval: '' });
+    }
+
+    // 3. Detect SHORTLISTED CANDIDATES
+    const slSheetName = detectedSheets.find((s) => /shortlist/i.test(s));
+    if (slSheetName && workbook.Sheets[slSheetName]) {
+      shortlistedData = XLSX.utils.sheet_to_json(workbook.Sheets[slSheetName], { defval: '' });
+    }
+
+    // Duplicate detection tracking maps
+    const seenPhones = new Map<string, number>();
+    const seenEmails = new Map<string, number>();
+    const seenPhoneNames = new Map<string, number>();
+    const seenEmailNames = new Map<string, number>();
+    const seenNameLocations = new Map<string, number>();
+    const seenNameEducations = new Map<string, number>();
+
+    const highConfidenceDuplicates: DuplicateCandidateMatch[] = [];
+    const mediumConfidenceDuplicates: DuplicateCandidateMatch[] = [];
+    const lowConfidenceDuplicates: DuplicateCandidateMatch[] = [];
+
+    candidateMasterData.forEach((row, idx) => {
+      const rowNum = idx + 2; // 1-indexed plus header row
+      const rawName = String(row['Candidate Name'] || row['Name'] || '').trim();
+      const normName = rawName.toLowerCase();
+      const rawPhone = row['Phone Number'] || row['Contact number'] || row['Phone'] || '';
+      const normPhone = normalizeIndianPhone(rawPhone);
+      const rawEmail = String(row['Email'] || row['Email Address'] || row['Mail'] || '').trim().toLowerCase();
+      const normEmail = rawEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ? rawEmail : '';
+      const rawLocation = String(row['Location'] || row['Current location'] || '').trim().toLowerCase();
+      const rawEducation = String(row['Education'] || '').trim().toLowerCase();
+
+      // --- TIER 1: HIGH CONFIDENCE ---
+      // A. Exact normalized phone
+      if (normPhone) {
+        if (seenPhones.has(normPhone)) {
+          const prevRow = seenPhones.get(normPhone)!;
+          highConfidenceDuplicates.push({
+            row: rowNum,
+            candidateName: rawName,
+            phone: normPhone,
+            email: normEmail || undefined,
+            confidence: 'HIGH',
+            duplicateType: 'DUPLICATE_HIGH_PHONE',
+            matchReason: `Exact duplicate phone number ${normPhone} matches row ${prevRow}`,
+          });
+        } else {
+          seenPhones.set(normPhone, rowNum);
+        }
+      }
+
+      // B. Exact normalized email
+      if (normEmail) {
+        if (seenEmails.has(normEmail)) {
+          const prevRow = seenEmails.get(normEmail)!;
+          highConfidenceDuplicates.push({
+            row: rowNum,
+            candidateName: rawName,
+            phone: normPhone || 'N/A',
+            email: normEmail,
+            confidence: 'HIGH',
+            duplicateType: 'DUPLICATE_HIGH_EMAIL',
+            matchReason: `Exact duplicate email ${normEmail} matches row ${prevRow}`,
+          });
+        } else {
+          seenEmails.set(normEmail, rowNum);
+        }
+      }
+
+      // --- TIER 2: MEDIUM CONFIDENCE ---
+      // C. Phone + normalized name
+      if (normPhone && normName) {
+        const phoneNameKey = `${normPhone}::${normName}`;
+        if (seenPhoneNames.has(phoneNameKey)) {
+          const prevRow = seenPhoneNames.get(phoneNameKey)!;
+          mediumConfidenceDuplicates.push({
+            row: rowNum,
+            candidateName: rawName,
+            phone: normPhone,
+            confidence: 'MEDIUM',
+            duplicateType: 'DUPLICATE_MEDIUM_PHONE_NAME',
+            matchReason: `Matching phone ${normPhone} and normalized name "${normName}" matches row ${prevRow}`,
+          });
+        } else {
+          seenPhoneNames.set(phoneNameKey, rowNum);
+        }
+      }
+
+      // D. Email + normalized name
+      if (normEmail && normName) {
+        const emailNameKey = `${normEmail}::${normName}`;
+        if (seenEmailNames.has(emailNameKey)) {
+          const prevRow = seenEmailNames.get(emailNameKey)!;
+          mediumConfidenceDuplicates.push({
+            row: rowNum,
+            candidateName: rawName,
+            phone: normPhone || 'N/A',
+            email: normEmail,
+            confidence: 'MEDIUM',
+            duplicateType: 'DUPLICATE_MEDIUM_EMAIL_NAME',
+            matchReason: `Matching email ${normEmail} and normalized name "${normName}" matches row ${prevRow}`,
+          });
+        } else {
+          seenEmailNames.set(emailNameKey, rowNum);
+        }
+      }
+
+      // --- TIER 3: LOW CONFIDENCE ---
+      // E. Name + location
+      if (normName && rawLocation) {
+        const nameLocKey = `${normName}::${rawLocation}`;
+        if (seenNameLocations.has(nameLocKey)) {
+          const prevRow = seenNameLocations.get(nameLocKey)!;
+          lowConfidenceDuplicates.push({
+            row: rowNum,
+            candidateName: rawName,
+            phone: normPhone || 'N/A',
+            confidence: 'LOW',
+            duplicateType: 'DUPLICATE_LOW_NAME_LOCATION',
+            matchReason: `Similar name "${rawName}" and location "${row['Location'] || row['Current location']}" matches row ${prevRow}`,
+          });
+        } else {
+          seenNameLocations.set(nameLocKey, rowNum);
+        }
+      }
+
+      // F. Name + education
+      if (normName && rawEducation) {
+        const nameEduKey = `${normName}::${rawEducation}`;
+        if (seenNameEducations.has(nameEduKey)) {
+          const prevRow = seenNameEducations.get(nameEduKey)!;
+          lowConfidenceDuplicates.push({
+            row: rowNum,
+            candidateName: rawName,
+            phone: normPhone || 'N/A',
+            confidence: 'LOW',
+            duplicateType: 'DUPLICATE_LOW_NAME_EDUCATION',
+            matchReason: `Similar name "${rawName}" and qualification "${row['Education']}" matches row ${prevRow}`,
+          });
+        } else {
+          seenNameEducations.set(nameEduKey, rowNum);
+        }
+      }
+    });
+
+    // Prepare preview records
+    const previewRows = candidateMasterData.slice(0, 10).map((row) => {
+      const rawPhone = row['Phone Number'] || row['Contact number'] || row['Phone'] || '';
+      const normPhone = normalizeIndianPhone(rawPhone);
+      return {
+        name: row['Candidate Name'] || row['Name'] || '',
+        rawPhone: String(rawPhone),
+        normalizedPhone: normPhone || 'INVALID',
+        location: row['Location'] || row['Current location'] || '',
+        experience: row['Experience'] || row['Years of experience'] || '',
+        education: row['Education'] || '',
+        currentJob: row['Current/Latest Job'] || row['Previous/current company'] || '',
+        assets: row['Assets'] || '',
+      };
+    });
+
+    return {
+      filename,
+      detectedSheets,
+      totalRows: candidateMasterData.length,
+      previewRows,
+      highConfidenceDuplicates,
+      mediumConfidenceDuplicates,
+      lowConfidenceDuplicates,
+      summary: {
+        newCandidates: candidateMasterData.length - highConfidenceDuplicates.length,
+        existingCandidates: 0,
+        potentialDuplicates: highConfidenceDuplicates.length + mediumConfidenceDuplicates.length + lowConfidenceDuplicates.length,
+        applicationsToCreate: candidateMasterData.length,
+        shortlistedToEnrich: shortlistedData.length,
+      },
+    };
+  }
+
+  /**
+   * Commits the reconciled workbook into the database under an ImportBatch.
+   */
+  static async commitWorkbook(
+    buffer: Buffer,
+    filename: string,
+    uploadedById: string,
+    targetJobId: string,
+    targetCompanyId: string
+  ) {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const detectedSheets = workbook.SheetNames;
+
+    const cmSheetName = detectedSheets.find((s) => /candidate\s*master/i.test(s)) || detectedSheets[0];
+    const candidateMasterData: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[cmSheetName], { defval: '' });
+
+    const dashSheetName = detectedSheets.find((s) => /dashboard/i.test(s));
+    const dashboardData: any[] = dashSheetName ? XLSX.utils.sheet_to_json(workbook.Sheets[dashSheetName], { defval: '' }) : [];
+
+    const slSheetName = detectedSheets.find((s) => /shortlist/i.test(s));
+    const shortlistedData: any[] = slSheetName ? XLSX.utils.sheet_to_json(workbook.Sheets[slSheetName], { defval: '' }) : [];
+
+    // Create Index Map of Shortlisted Phones
+    const shortlistedPhoneMap = new Set<string>();
+    for (const row of shortlistedData) {
+      const phone = normalizeIndianPhone(row['Contact number'] || row['Phone Number'] || row['Phone']);
+      if (phone) shortlistedPhoneMap.add(phone);
+    }
+
+    // Create Index Map of Dashboard rows
+    const dashboardPhoneMap = new Map<string, any>();
+    for (const row of dashboardData) {
+      const phone = normalizeIndianPhone(row['Contact number'] || row['Phone Number'] || row['Phone']);
+      if (phone) dashboardPhoneMap.set(phone, row);
+    }
+
+    // 1. Create ImportBatch
+    const totalBatches = await prisma.importBatch.count();
+    const batchCode = `BATCH-${String(totalBatches + 1).padStart(5, '0')}`;
+
+    const batch = await prisma.importBatch.create({
+      data: {
+        batchCode,
+        filename,
+        uploadedById,
+        totalRows: candidateMasterData.length,
+        status: 'PENDING',
+      },
+    });
+
+    let importedCount = 0;
+    let duplicateCount = 0;
+    let skippedCount = 0;
+
+    // Process rows in chunks
+    for (const row of candidateMasterData) {
+      const rawName = String(row['Candidate Name'] || row['Name'] || '').trim();
+      const rawPhone = row['Phone Number'] || row['Contact number'] || row['Phone'] || '';
+      const normPhone = normalizeIndianPhone(rawPhone);
+
+      if (!rawName || !normPhone) {
+        skippedCount++;
+        continue;
+      }
+
+      const dashRow = dashboardPhoneMap.get(normPhone) || {};
+      const isShortlisted = shortlistedPhoneMap.has(normPhone);
+
+      const location = String(row['Location'] || dashRow['Location'] || dashRow['Current location'] || '').trim();
+      const education = String(row['Education'] || dashRow['Education'] || '').trim();
+      const rawExp = String(row['Experience'] || dashRow['Years of experience'] || '');
+      const expYears = parseInt(rawExp.replace(/\D/g, '')) || 0;
+      const currentJob = String(row['Current/Latest Job'] || dashRow['Previous/current company'] || '').trim();
+      const assets = String(row['Assets'] || '');
+      const hasBike = /bike|two\s*wheeler/i.test(assets) || dashRow['Have 2wheeler with license'] === 1 || dashRow['Have 2wheeler with license'] === '1';
+      const hasLicense = /license|dl/i.test(assets) || dashRow['Have 2wheeler with license'] === 1;
+
+      // Extract skills
+      const rawSkills = String(row['Skills / Notes'] || '');
+      const skillsArray = rawSkills
+        ? rawSkills.split(',').map((s) => s.trim()).filter(Boolean)
+        : ['Sales', 'Communication'];
+
+      // Extract languages
+      const rawLanguages = String(row['Languages'] || '');
+      const languagesArray = rawLanguages
+        ? rawLanguages.split(',').map((l) => l.trim()).filter(Boolean)
+        : ['Hindi', 'Gujarati'];
+
+      const rawEmail = String(row['Email'] || row['Email Address'] || row['Mail'] || '').trim().toLowerCase();
+      const normEmail = rawEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ? rawEmail : null;
+
+      // Check existing candidate by normalized phone OR exact email (HIGH confidence match)
+      let candidate = await prisma.candidate.findFirst({
+        where: {
+          OR: [
+            { normalizedPhone: normPhone },
+            ...(normEmail ? [{ email: normEmail }] : []),
+          ],
+        },
+      });
+
+      if (!candidate) {
+        const totalCandidates = await prisma.candidate.count();
+        const candidateCode = `CAN-${String(totalCandidates + 1).padStart(6, '0')}`;
+
+        candidate = await prisma.candidate.create({
+          data: {
+            candidateCode,
+            fullName: rawName,
+            rawPhone: String(rawPhone),
+            normalizedPhone: normPhone,
+            currentLocation: location,
+            education,
+            experienceYears: expYears,
+            currentJob,
+            hasTwoWheeler: hasBike,
+            hasDrivingLicense: hasLicense,
+            skills: JSON.stringify(skillsArray),
+            languages: JSON.stringify(languagesArray),
+            source: 'EXCEL_IMPORT',
+            sourceReference: filename,
+            importBatchId: batch.id,
+          },
+        });
+      } else {
+        duplicateCount++;
+      }
+
+      // Check existing application for this candidate & job
+      const existingApp = await prisma.application.findFirst({
+        where: { candidateId: candidate.id, jobId: targetJobId },
+      });
+
+      if (!existingApp) {
+        const totalApps = await prisma.application.count();
+        const appCode = `APP-${String(totalApps + 1).padStart(6, '0')}`;
+
+        const initialStage = isShortlisted ? 'SHORTLISTED' : 'NEW';
+        const formStatus = isShortlisted ? 'RECEIVED' : 'PENDING';
+        const cvStatus = isShortlisted ? 'CV_RECEIVED' : 'CV_REQUIRED';
+
+        await prisma.application.create({
+          data: {
+            applicationCode: appCode,
+            candidateId: candidate.id,
+            jobId: targetJobId,
+            companyId: targetCompanyId,
+            currentStage: initialStage,
+            formStatus,
+            cvStatus,
+            formReceivedAt: isShortlisted ? new Date() : null,
+            cvReceivedAt: isShortlisted ? new Date() : null,
+            readyForScreeningAt: isShortlisted ? new Date() : null,
+            createdById: uploadedById,
+          },
+        });
+      }
+
+      importedCount++;
+    }
+
+    // Update batch status
+    await prisma.importBatch.update({
+      where: { id: batch.id },
+      data: {
+        status: 'COMMITTED',
+        importedRows: importedCount,
+        duplicateRows: duplicateCount,
+        skippedRows: skippedCount,
+      },
+    });
+
+    await AuditService.log({
+      userId: uploadedById,
+      action: 'IMPORT_COMMITTED',
+      entity: 'ImportBatch',
+      entityId: batch.id,
+      newValues: {
+        filename,
+        importedCount,
+        duplicateCount,
+        skippedCount,
+      },
+    });
+
+    return {
+      batchId: batch.id,
+      batchCode: batch.batchCode,
+      importedCount,
+      duplicateCount,
+      skippedCount,
+    };
+  }
+}

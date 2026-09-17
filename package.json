@@ -1,15 +1,49 @@
 {
-  "name": "genius-consultants-crm",
+  "name": "genius-consultancy-crm",
   "version": "1.0.0",
-  "description": "Genius Consultants - Telecalling Operations Portal",
+  "private": true,
+  "description": "Genius Consultancy - Internal Recruitment Operations CRM",
   "scripts": {
-    "dev:server": "cd server && npm run dev",
-    "dev:client": "cd client && npm run dev",
-    "build": "cd server && npm run build && cd ../client && npm run build",
-    "db:push": "cd server && npm run db:push",
-    "db:seed": "cd server && npm run db:seed"
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:push": "prisma db push",
+    "test": "prisma generate --schema=prisma/schema.sqlite.prisma && npx tsx test/run_tests.ts",
+    "test:unit": "npx tsx test/run_tests.ts",
+    "backup:db": "npx tsx scripts/backup-db.ts",
+    "restore:db": "npx tsx scripts/restore-db.ts",
+    "bootstrap:production": "npx tsx prisma/bootstrap-production.ts"
   },
-  "keywords": ["crm", "telecalling", "recruitment", "portal"],
-  "author": "Genius Consultants",
-  "license": "ISC"
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "bcryptjs": "^2.4.3",
+    "clsx": "^2.1.1",
+    "date-fns": "^3.6.0",
+    "date-fns-tz": "^3.1.3",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^0.441.0",
+    "next": "^14.2.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.2",
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^20.16.5",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.45",
+    "prisma": "^5.20.0",
+    "tailwindcss": "^3.4.11",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
 }

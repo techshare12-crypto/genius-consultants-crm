@@ -1,0 +1,524 @@
+// Genius Consultancy - SQLite Local Dev/Test Prisma Schema
+// Matches PostgreSQL schema structure
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 1. IDENTITY & ACCESS CONTROL
+model User {
+  id             String         @id @default(uuid())
+  email          String         @unique
+  passwordHash   String
+  fullName       String
+  phone          String?
+  status         String         @default("ACTIVE") // ACTIVE, INACTIVE, SUSPENDED
+  presenceStatus String         @default("OFFLINE") // ONLINE, ACTIVE, CALLING_ACTIVITY, AFTER_CALL_WORK, IDLE, BREAK, OFFLINE
+  teamId         String?
+  lastActivityAt DateTime?
+  lastLoginAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  team           Team?          @relation("TeamMembers", fields: [teamId], references: [id])
+  ledTeams       Team[]         @relation("TeamLead")
+  userRoles      UserRole[]
+
+  assignedApplications       Application[]                  @relation("AssignedExecutive")
+  delegatedAssignments       Application[]                  @relation("AssignedBy")
+  finalShortlistedApps       Application[]                  @relation("FinalShortlistedBy")
+  assignmentHistoriesAsExec  ApplicationAssignmentHistory[] @relation("ExecutiveHistory")
+  assignmentHistoriesAsAdmin ApplicationAssignmentHistory[] @relation("AdminHistory")
+  callLogs                   CallLog[]
+  callbacks                  Callback[]
+  screenings                 Screening[]
+  clientSubmissions          ClientSubmission[]
+  interviewsUpdated          Interview[]
+  qualityReviewsReceived     QualityReview[]                @relation("ExecutiveQualityReviews")
+  qualityReviewsGiven        QualityReview[]                @relation("ReviewerQualityReviews")
+
+  createdCompanies           Company[]                      @relation("CompanyCreator")
+  createdJobs                JobRequirement[]               @relation("JobCreator")
+  companyFollowups           CompanyFollowup[]
+  createdApplications        Application[]                  @relation("ApplicationCreator")
+  uploadedImportBatches      ImportBatch[]
+  auditLogs                  AuditLog[]
+  notifications              Notification[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  isSystem    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  userRoles   UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id              String           @id @default(uuid())
+  name            String           @unique
+  module          String
+  description     String?
+  createdAt       DateTime         @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  assignedAt   DateTime   @default(now())
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model Team {
+  id          String        @id @default(uuid())
+  name        String        @unique
+  teamLeadId  String?
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  teamLead    User?         @relation("TeamLead", fields: [teamLeadId], references: [id])
+  members     User[]        @relation("TeamMembers")
+  applications Application[]
+  assignmentHistories ApplicationAssignmentHistory[]
+
+  @@map("teams")
+}
+
+// 2. BUSINESS DEVELOPMENT & JOB MASTER
+model Company {
+  id           String          @id @default(uuid())
+  companyCode  String          @unique
+  companyName  String
+  industry     String?
+  companyType  String?
+  address      String?
+  city         String?
+  state        String?
+  pincode      String?
+  website      String?
+  status       String          @default("PROSPECT")
+  source       String?
+  notes        String?
+  createdById  String
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  createdBy    User            @relation("CompanyCreator", fields: [createdById], references: [id])
+  contacts     CompanyContact[]
+  followups    CompanyFollowup[]
+  jobRequirements JobRequirement[]
+  applications Application[]
+  submissions  ClientSubmission[]
+
+  @@map("companies")
+}
+
+model CompanyContact {
+  id          String   @id @default(uuid())
+  companyId   String
+  contactName String
+  designation String?
+  phone       String
+  email       String?
+  isPrimary   Boolean  @default(false)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("company_contacts")
+}
+
+model CompanyFollowup {
+  id           String       @id @default(uuid())
+  companyId    String
+  userId       String
+  followupType String       @default("CALL")
+  scheduledAt  DateTime?
+  completedAt  DateTime?
+  notes        String
+  nextAction   String?
+  createdAt    DateTime     @default(now())
+
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@map("company_followups")
+}
+
+model JobRequirement {
+  id                     String           @id @default(uuid())
+  jobCode                String           @unique
+  companyId              String
+  jobTitle               String
+  department             String?
+  jobDescription         String?
+  vacancies              Int              @default(1)
+  location               String
+  salaryMin              Float?
+  salaryMax              Float?
+  salaryText             String?
+  experienceMin          Int              @default(0)
+  experienceMax          Int?
+  educationRequirement  String?
+  genderRequirement     String?
+  ageRequirement        String?
+  skillsRequired         String           @default("[]")
+  twoWheelerRequired     Boolean          @default(false)
+  drivingLicenseRequired Boolean          @default(false)
+  noticePeriod           String?
+  jobStatus              String           @default("OPEN")
+  createdById            String
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  company                Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy              User             @relation("JobCreator", fields: [createdById], references: [id])
+  applications           Application[]
+  submissions            ClientSubmission[]
+
+  @@map("job_requirements")
+}
+
+// 3. CANDIDATE MASTER
+model Candidate {
+  id                 String           @id @default(uuid())
+  candidateCode      String           @unique
+  fullName           String
+  rawPhone           String
+  normalizedPhone    String           @unique
+  alternatePhone     String?
+  email              String?
+  gender             String?
+  age                Int?
+  dateOfBirth        DateTime?
+  currentLocation    String?
+  permanentLocation  String?
+  education          String?
+  experienceYears    Int              @default(0)
+  experienceMonths   Int              @default(0)
+  currentCompany     String?
+  currentJob         String?
+  currentSalary      Float?
+  expectedSalary     Float?
+  noticePeriod       String?
+  skills             String           @default("[]")
+  languages          String           @default("[]")
+  hasTwoWheeler      Boolean          @default(false)
+  hasDrivingLicense  Boolean          @default(false)
+  source             String           @default("EXCEL_IMPORT")
+  sourceReference    String?
+  notes              String?
+  activeStatus       Boolean          @default(true)
+  importBatchId      String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  importBatch        ImportBatch?     @relation(fields: [importBatchId], references: [id])
+  applications       Application[]
+  assignmentHistories ApplicationAssignmentHistory[]
+  callLogs           CallLog[]
+  callbacks          Callback[]
+  submissionItems    ClientSubmissionItem[]
+
+  @@map("candidates")
+}
+
+// 4. APPLICATION TRANSACTION
+model Application {
+  id                   String           @id @default(uuid())
+  applicationCode      String           @unique
+  candidateId          String
+  jobId                String
+  companyId            String
+  assignedExecutiveId  String?
+  assignedTeamId       String?
+  assignedById         String?
+  assignedAt           DateTime?
+  currentStage         String           @default("NEW")
+  formStatus           String           @default("PENDING")
+  cvStatus             String           @default("CV_REQUIRED")
+  formSentAt           DateTime?
+  formReceivedAt       DateTime?
+  cvRequestedAt        DateTime?
+  cvReceivedAt         DateTime?
+  readyForScreeningAt  DateTime?
+  finalShortlistedAt   DateTime?
+  finalShortlistedById String?
+  notes                String?
+  createdById          String
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  candidate            Candidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job                  JobRequirement   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  company              Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignedExecutive    User?            @relation("AssignedExecutive", fields: [assignedExecutiveId], references: [id])
+  assignedTeam         Team?            @relation(fields: [assignedTeamId], references: [id])
+  assignedBy           User?            @relation("AssignedBy", fields: [assignedById], references: [id])
+  finalShortlistedBy   User?            @relation("FinalShortlistedBy", fields: [finalShortlistedById], references: [id])
+  createdBy            User             @relation("ApplicationCreator", fields: [createdById], references: [id])
+
+  assignmentHistories  ApplicationAssignmentHistory[]
+  callLogs             CallLog[]
+  callbacks            Callback[]
+  screenings           Screening[]
+  submissionItems      ClientSubmissionItem[]
+  interviews           Interview[]
+  qualityReviews       QualityReview[]
+
+  @@map("applications")
+}
+
+model ApplicationAssignmentHistory {
+  id             String      @id @default(uuid())
+  applicationId  String
+  candidateId    String
+  executiveId    String
+  teamId         String?
+  assignedById   String
+  assignedAt     DateTime    @default(now())
+  unassignedAt   DateTime?
+  reason         String?
+  assignmentMode String      @default("MANUAL")
+
+  application    Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate      Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  executive      User        @relation("ExecutiveHistory", fields: [executiveId], references: [id])
+  team           Team?       @relation(fields: [teamId], references: [id])
+  assignedBy     User        @relation("AdminHistory", fields: [assignedById], references: [id])
+
+  @@map("application_assignment_histories")
+}
+
+// 5. CALLING & CALLBACKS
+model CallLog {
+  id               String      @id @default(uuid())
+  applicationId    String
+  candidateId      String
+  executiveId      String
+  callOutcome      String
+  remarks          String?
+  callbackRequired Boolean     @default(false)
+  callbackDateTime DateTime?
+  createdAt        DateTime    @default(now())
+
+  application      Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate        Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  executive        User        @relation(fields: [executiveId], references: [id])
+  callbacks        Callback[]
+
+  @@map("call_logs")
+}
+
+model Callback {
+  id                String           @id @default(uuid())
+  applicationId     String
+  candidateId       String
+  executiveId       String
+  sourceCallLogId   String?
+  scheduledAt       DateTime
+  reason            String
+  priority          String           @default("MEDIUM")
+  status            String           @default("PENDING")
+  completedAt       DateTime?
+  completionRemarks String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  application       Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate         Candidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  executive         User             @relation(fields: [executiveId], references: [id])
+  sourceCallLog     CallLog?         @relation(fields: [sourceCallLogId], references: [id])
+
+  @@map("callbacks")
+}
+
+// 6. SCREENING & SUBMISSIONS
+model Screening {
+  id                String          @id @default(uuid())
+  applicationId     String
+  screenerId        String
+  screeningStatus   String
+  screeningDate     DateTime        @default(now())
+  holdFollowupDate  DateTime?
+  remarks           String?
+  nextAction        String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  application       Application     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  screener          User            @relation(fields: [screenerId], references: [id])
+
+  @@map("screenings")
+}
+
+model ClientSubmission {
+  id               String                 @id @default(uuid())
+  submissionCode   String                 @unique
+  companyId        String
+  jobId            String
+  submittedById    String
+  submittedAt      DateTime               @default(now())
+  submissionMethod String                 @default("EMAIL")
+  remarks          String?
+  createdAt        DateTime               @default(now())
+
+  company          Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  job              JobRequirement         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  submittedBy      User                   @relation(fields: [submittedById], references: [id])
+  items            ClientSubmissionItem[]
+  interviews       Interview[]
+
+  @@map("client_submissions")
+}
+
+model ClientSubmissionItem {
+  id             String           @id @default(uuid())
+  submissionId   String
+  applicationId  String
+  candidateId    String
+  clientFeedback String?
+  feedbackDate   DateTime?
+  createdAt      DateTime         @default(now())
+
+  submission     ClientSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  application    Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidate      Candidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@map("client_submission_items")
+}
+
+// 7. INTERVIEW ENGINE
+model Interview {
+  id             String           @id @default(uuid())
+  applicationId  String
+  submissionId   String?
+  roundNumber    Int              @default(1)
+  roundName      String           @default("Round 1")
+  scheduledAt    DateTime
+  mode           String           @default("OFFLINE")
+  location       String?
+  status         String           @default("SCHEDULED")
+  outcome        String           @default("PENDING")
+  feedback       String?
+  updatedById    String
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  application    Application      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  submission     ClientSubmission? @relation(fields: [submissionId], references: [id])
+  updatedBy      User             @relation(fields: [updatedById], references: [id])
+
+  @@map("interviews")
+}
+
+// 8. QUALITY, AUDIT, IMPORTS & NOTIFICATIONS
+model QualityReview {
+  id                    String      @id @default(uuid())
+  applicationId         String
+  executiveId           String
+  reviewerId            String
+  rating                Int         @default(3)
+  communicationScore    Int         @default(3)
+  jobExplanationScore   Int         @default(3)
+  processAdherenceScore Int         @default(3)
+  remarks               String
+  reviewedAt            DateTime    @default(now())
+
+  application           Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  executive             User        @relation("ExecutiveQualityReviews", fields: [executiveId], references: [id])
+  reviewer              User        @relation("ReviewerQualityReviews", fields: [reviewerId], references: [id])
+
+  @@map("quality_reviews")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String
+  oldValues String?
+  newValues String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model ImportBatch {
+  id            String       @id @default(uuid())
+  batchCode     String       @unique
+  filename      String
+  uploadedById  String
+  totalRows     Int          @default(0)
+  importedRows  Int          @default(0)
+  skippedRows   Int          @default(0)
+  duplicateRows Int          @default(0)
+  failedRows    Int          @default(0)
+  mappingConfig String       @default("{}")
+  status        String       @default("PENDING")
+  createdAt     DateTime     @default(now())
+
+  uploadedBy    User         @relation(fields: [uploadedById], references: [id])
+  candidates    Candidate[]
+
+  @@map("import_batches")
+}
+
+model Notification {
+  id         String    @id @default(uuid())
+  userId     String
+  title      String
+  message    String
+  type       String    @default("SYSTEM")
+  entityType String?
+  entityId   String?
+  isRead     Boolean   @default(false)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
