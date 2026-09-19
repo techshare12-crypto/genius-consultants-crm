@@ -13,31 +13,43 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
   }
 
-  const users = await prisma.user.findMany({
-    select: {
-      id: true,
-      email: true,
-      fullName: true,
-      phone: true,
-      status: true,
-      presenceStatus: true,
-      lastActivityAt: true,
-      lastLoginAt: true,
-      team: { select: { id: true, name: true } },
-      userRoles: {
-        select: {
-          role: { select: { id: true, name: true } },
+  const [users, allRoles, allTeams] = await Promise.all([
+    prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phone: true,
+        status: true,
+        presenceStatus: true,
+        lastActivityAt: true,
+        lastLoginAt: true,
+        createdAt: true,
+        teamId: true,
+        team: { select: { id: true, name: true } },
+        userRoles: {
+          select: {
+            role: { select: { id: true, name: true, description: true } },
+          },
+        },
+        _count: {
+          select: {
+            assignedApplications: true,
+            callLogs: true,
+          },
         },
       },
-      _count: {
-        select: {
-          assignedApplications: true,
-          callLogs: true,
-        },
-      },
-    },
-    orderBy: { fullName: 'asc' },
-  });
+      orderBy: { fullName: 'asc' },
+    }),
+    prisma.role.findMany({
+      select: { id: true, name: true, description: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.team.findMany({
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
 
   const formatted = users.map((u) => ({
     id: u.id,
@@ -48,13 +60,21 @@ export async function GET(req: NextRequest) {
     presenceStatus: u.presenceStatus,
     lastActivityAt: u.lastActivityAt,
     lastLoginAt: u.lastLoginAt,
+    createdAt: u.createdAt,
+    teamId: u.teamId,
     team: u.team,
     roles: u.userRoles.map((r) => r.role.name),
+    roleDetails: u.userRoles.map((r) => r.role),
     assignedCount: u._count.assignedApplications,
     callLogsCount: u._count.callLogs,
   }));
 
-  return NextResponse.json({ success: true, data: formatted });
+  return NextResponse.json({
+    success: true,
+    data: formatted,
+    roles: allRoles,
+    teams: allTeams,
+  });
 }
 
 export async function POST(req: NextRequest) {

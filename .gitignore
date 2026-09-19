@@ -29,3 +29,8 @@ backups/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Build info and scratch
+*.tsbuildinfo
+*.txt
+scripts/verify-production-*.ts

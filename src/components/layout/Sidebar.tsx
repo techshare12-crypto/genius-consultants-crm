@@ -33,11 +33,11 @@ export function Sidebar() {
       show: true,
     },
     {
-      label: 'Calling Station',
+      label: 'Calling Workspace',
       href: '/calling',
       icon: PhoneCall,
       show: hasPermission('calling.log'),
-      badge: 'External HEYO',
+      badge: 'Live Queue',
     },
     {
       label: 'Callbacks Center',
@@ -100,10 +100,10 @@ export function Sidebar() {
       show: hasPermission('candidate.import'),
     },
     {
-      label: 'User Management',
-      href: '/users',
+      label: 'Employee Management',
+      href: '/admin/employees',
       icon: UserCog,
-      show: hasPermission('user.manage') || hasRole('SUPER_ADMIN'),
+      show: hasPermission('user.manage') || hasPermission('user.view') || hasRole('SUPER_ADMIN'),
     },
     {
       label: 'Audit Trail',
@@ -157,9 +157,9 @@ export function Sidebar() {
       <div className="p-4 border-t border-slate-800 text-[11px] text-slate-400 bg-slate-950/40">
         <div className="flex items-center justify-between">
           <span className="font-semibold text-slate-300">Genius CRM</span>
-          <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">v2.0</span>
+          <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-mono">v1.1</span>
         </div>
-        <p className="text-[10px] text-slate-400 mt-1">Dialing externally on HEYO</p>
+        <p className="text-[10px] text-slate-400 mt-1">Manual External Dialing Mode</p>
       </div>
     </aside>
   );

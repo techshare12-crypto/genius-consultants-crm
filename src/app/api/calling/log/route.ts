@@ -38,3 +38,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: err.message || 'Failed to log call' }, { status: 500 });
   }
 }
+
+export async function GET(req: NextRequest) {
+  const session = await getSessionUser(req);
+  if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+  const { searchParams } = new URL(req.url);
+  const applicationId = searchParams.get('applicationId');
+  const candidateId = searchParams.get('candidateId');
+
+  if (!applicationId && !candidateId) {
+    return NextResponse.json({ success: false, error: 'applicationId or candidateId is required' }, { status: 400 });
+  }
+
+  try {
+    const where: any = {};
+    if (applicationId) where.applicationId = applicationId;
+    if (candidateId) where.candidateId = candidateId;
+
+    const { prisma } = await import('@/server/db/prisma');
+    const logs = await prisma.callLog.findMany({
+      where,
+      include: {
+        executive: { select: { id: true, fullName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    return NextResponse.json({ success: true, data: logs });
+  } catch (err: any) {
+    console.error('Fetch call logs error:', err);
+    return NextResponse.json({ success: false, error: 'Failed to fetch call logs' }, { status: 500 });
+  }
+}
+

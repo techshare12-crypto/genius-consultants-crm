@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { StageBadge } from '@/components/common/Badge';
+import { StageBadge, Badge } from '@/components/common/Badge';
 import { Modal } from '@/components/common/Modal';
 import {
   PhoneCall,
@@ -13,66 +13,342 @@ import {
   MessageSquare,
   Bike,
   CreditCard,
-  User,
   Building2,
-  ChevronRight,
   Send,
   AlertCircle,
+  CheckCircle2,
+  Search,
+  Filter,
+  RefreshCw,
+  PhoneForwarded,
+  Sparkles,
+  History,
+  PhoneOff,
+  User,
+  ChevronRight,
+  ChevronLeft,
+  CalendarClock,
+  ExternalLink,
+  ShieldAlert
 } from 'lucide-react';
 
-export default function CallingStationPage() {
+interface ApplicationItem {
+  id: string;
+  applicationCode: string;
+  candidateId: string;
+  jobId: string;
+  companyId: string;
+  currentStage: string;
+  formStatus: string;
+  cvStatus: string;
+  updatedAt: string;
+  candidate: {
+    id: string;
+    fullName: string;
+    phone: string;
+    normalizedPhone: string;
+    alternatePhone?: string | null;
+    email?: string | null;
+    currentLocation?: string | null;
+    currentCompany?: string | null;
+    currentJob?: string | null;
+    experienceYears?: number;
+    experienceMonths?: number;
+    currentSalary?: number | null;
+    expectedSalary?: number | null;
+    hasTwoWheeler?: boolean;
+    hasDrivingLicense?: boolean;
+    skills?: string[];
+  };
+  job: {
+    id: string;
+    jobTitle: string;
+    location?: string;
+    vacancies?: number;
+    company: {
+      id: string;
+      companyName: string;
+    };
+  };
+  company: {
+    id: string;
+    companyName: string;
+  };
+  assignedExecutive?: {
+    id: string;
+    fullName: string;
+    email: string;
+  } | null;
+  _count?: {
+    callLogs: number;
+    callbacks: number;
+  };
+}
+
+interface CallbackItem {
+  id: string;
+  applicationId: string;
+  candidateId: string;
+  scheduledAt: string;
+  reason?: string;
+  priority: 'HIGH' | 'MEDIUM' | 'LOW';
+  status: 'PENDING' | 'COMPLETED' | 'CANCELLED';
+  isOverdue?: boolean;
+  displayCategory?: 'OVERDUE' | 'TODAY' | 'UPCOMING';
+}
+
+interface CallLogItem {
+  id: string;
+  applicationId: string;
+  candidateId: string;
+  executiveId: string;
+  callOutcome: string;
+  remarks?: string | null;
+  callbackRequired: boolean;
+  callbackDateTime?: string | null;
+  createdAt: string;
+  executive?: {
+    id: string;
+    fullName: string;
+  };
+}
+
+export default function ExecutiveCallingWorkspacePage() {
   const { user } = useAuth();
-  const [applications, setApplications] = useState<any[]>([]);
-  const [selectedApp, setSelectedApp] = useState<any | null>(null);
+
+  const [applications, setApplications] = useState<ApplicationItem[]>([]);
+  const [callbacks, setCallbacks] = useState<CallbackItem[]>([]);
+  const [selectedApp, setSelectedApp] = useState<ApplicationItem | null>(null);
+  const [callLogs, setCallLogs] = useState<CallLogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Clipboard feedbacks
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [copiedMsg, setCopiedMsg] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  // Modals
+  // Queue Filters & Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'ALL' | 'CALLBACKS_DUE' | 'FOLLOWUPS_DUE' | 'NEW_ASSIGNED' | 'WORKED_TODAY' | 'NOT_WORKED'>('ALL');
+  const [jobFilter, setJobFilter] = useState('ALL');
+  const [companyFilter, setCompanyFilter] = useState('ALL');
+  const [autoAdvance, setAutoAdvance] = useState(true);
+
+  // Call Logging Form State
+  const [remarks, setRemarks] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [selectedOutcome, setSelectedOutcome] = useState<string | null>(null);
+
+  // Callback Scheduling Modal & Inputs
   const [showCallbackModal, setShowCallbackModal] = useState(false);
-  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
-  const [whatsAppType, setWhatsAppType] = useState<'FORM' | 'CV_REQUEST' | 'INTERVIEW_INVITE'>('FORM');
-
-  // Callback Form
   const [cbDate, setCbDate] = useState('');
   const [cbTime, setCbTime] = useState('14:00');
   const [cbReason, setCbReason] = useState('');
   const [cbPriority, setCbPriority] = useState<'HIGH' | 'MEDIUM' | 'LOW'>('MEDIUM');
 
-  // Shortlist / Call Log
-  const [remarks, setRemarks] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  // WhatsApp Templates Modal
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [whatsAppType, setWhatsAppType] = useState<'FORM' | 'CV_REQUEST' | 'INTERVIEW_INVITE'>('FORM');
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   useEffect(() => {
-    fetchCallingQueue();
+    fetchInitialData();
   }, []);
 
-  const fetchCallingQueue = async () => {
+  useEffect(() => {
+    if (selectedApp) {
+      fetchCallHistory(selectedApp.id, selectedApp.candidateId);
+      setRemarks('');
+      setSelectedOutcome(null);
+    }
+  }, [selectedApp?.id]);
+
+  const fetchInitialData = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/applications?limit=100');
-      if (res.ok) {
-        const d = await res.json();
-        setApplications(d.data || []);
-        if (d.data?.length > 0 && !selectedApp) {
-          setSelectedApp(d.data[0]);
+      const [appRes, cbRes] = await Promise.all([
+        fetch('/api/applications?limit=200'),
+        fetch('/api/callbacks?status=PENDING'),
+      ]);
+
+      let appsData: ApplicationItem[] = [];
+      let cbData: CallbackItem[] = [];
+
+      if (appRes.ok) {
+        const d = await appRes.json();
+        appsData = d.data || [];
+        setApplications(appsData);
+      }
+
+      if (cbRes.ok) {
+        const d = await cbRes.json();
+        cbData = d.data || [];
+        setCallbacks(cbData);
+      }
+
+      if (appsData.length > 0) {
+        // Set first candidate in prioritized order
+        const prioritized = prioritizeList(appsData, cbData);
+        if (prioritized.length > 0) {
+          setSelectedApp(prioritized[0].app);
         }
       }
     } catch (err) {
-      console.error('Error loading queue', err);
+      console.error('Error loading calling queue:', err);
+      showToast('Failed to load calling queue', 'error');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
+
+  const fetchCallHistory = async (applicationId: string, candidateId: string) => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/calling/log?applicationId=${applicationId}&candidateId=${candidateId}`);
+      if (res.ok) {
+        const d = await res.json();
+        setCallLogs(d.data || []);
+      }
+    } catch (err) {
+      console.error('Error loading call logs:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    fetchInitialData();
+  };
+
+  // Prioritization Engine
+  const prioritizeList = (apps: ApplicationItem[], cbs: CallbackItem[]) => {
+    const cbMap = new Map<string, CallbackItem>();
+    cbs.forEach((c) => {
+      if (c.applicationId) cbMap.set(c.applicationId, c);
+    });
+
+    const now = new Date();
+
+    return apps.map((app) => {
+      const cb = cbMap.get(app.id);
+      let rank = 4; // Default: Remaining Leads
+      let tag = 'Active Queue';
+      let tagVariant: 'purple' | 'warning' | 'danger' | 'info' | 'neutral' = 'neutral';
+
+      if (cb) {
+        const isOverdue = new Date(cb.scheduledAt) < now;
+        rank = 1;
+        tag = isOverdue ? 'Callback Overdue' : 'Callback Due';
+        tagVariant = isOverdue ? 'danger' : 'warning';
+      } else if (app.currentStage === 'INTERESTED' || app.currentStage === 'CALLING') {
+        rank = 2;
+        tag = 'Follow-up Due';
+        tagVariant = 'info';
+      } else if (app.currentStage === 'NEW' || app.currentStage === 'ASSIGNED') {
+        rank = 3;
+        tag = 'Newly Assigned';
+        tagVariant = 'purple';
+      }
+
+      return {
+        app,
+        callback: cb,
+        rank,
+        tag,
+        tagVariant,
+      };
+    }).sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return new Date(b.app.updatedAt).getTime() - new Date(a.app.updatedAt).getTime();
+    });
+  };
+
+  // Filtered & Prioritized Queue
+  const prioritizedQueue = useMemo(() => {
+    const prioritized = prioritizeList(applications, callbacks);
+
+    return prioritized.filter(({ app, callback, rank }) => {
+      const query = searchQuery.toLowerCase().trim();
+      const matchesSearch =
+        !query ||
+        app.candidate.fullName.toLowerCase().includes(query) ||
+        app.candidate.phone.includes(query) ||
+        app.candidate.normalizedPhone.includes(query) ||
+        app.applicationCode.toLowerCase().includes(query) ||
+        app.job.jobTitle.toLowerCase().includes(query) ||
+        app.company.companyName.toLowerCase().includes(query);
+
+      const matchesJob = jobFilter === 'ALL' || app.jobId === jobFilter;
+      const matchesCompany = companyFilter === 'ALL' || app.companyId === companyFilter;
+
+      let matchesTab = true;
+      if (activeTab === 'CALLBACKS_DUE') {
+        matchesTab = !!callback;
+      } else if (activeTab === 'FOLLOWUPS_DUE') {
+        matchesTab = app.currentStage === 'INTERESTED' || app.currentStage === 'CALLING';
+      } else if (activeTab === 'NEW_ASSIGNED') {
+        matchesTab = app.currentStage === 'NEW' || app.currentStage === 'ASSIGNED';
+      } else if (activeTab === 'WORKED_TODAY') {
+        matchesTab = (app._count?.callLogs ?? 0) > 0;
+      } else if (activeTab === 'NOT_WORKED') {
+        matchesTab = (app._count?.callLogs ?? 0) === 0;
+      }
+
+      return matchesSearch && matchesJob && matchesCompany && matchesTab;
+    });
+  }, [applications, callbacks, searchQuery, activeTab, jobFilter, companyFilter]);
+
+  // Unique Job and Company options for dropdown filters
+  const uniqueJobs = useMemo(() => {
+    const map = new Map<string, string>();
+    applications.forEach((a) => map.set(a.jobId, a.job.jobTitle));
+    return Array.from(map.entries()).map(([id, title]) => ({ id, title }));
+  }, [applications]);
+
+  const uniqueCompanies = useMemo(() => {
+    const map = new Map<string, string>();
+    applications.forEach((a) => map.set(a.companyId, a.company.companyName));
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [applications]);
+
+  // Top Summary Metrics
+  const metrics = useMemo(() => {
+    const total = applications.length;
+    const callbacksDue = callbacks.length;
+    const followupsDue = applications.filter((a) => a.currentStage === 'INTERESTED' || a.currentStage === 'CALLING').length;
+    const workedToday = applications.filter((a) => (a._count?.callLogs ?? 0) > 0).length;
+    const connectedCount = applications.filter((a) => a.currentStage === 'INTERESTED' || a.currentStage === 'SHORTLISTED').length;
+    const shortlistedCount = applications.filter((a) => a.currentStage === 'SHORTLISTED').length;
+
+    return { total, callbacksDue, followupsDue, workedToday, connectedCount, shortlistedCount };
+  }, [applications, callbacks]);
 
   const handleCopy = (text: string, isPhone = true) => {
     navigator.clipboard.writeText(text);
     if (isPhone) {
       setCopiedPhone(true);
       setTimeout(() => setCopiedPhone(false), 2000);
+      showToast('Candidate phone number copied to clipboard');
     } else {
       setCopiedMsg(true);
       setTimeout(() => setCopiedMsg(false), 2000);
+      showToast('WhatsApp template copied to clipboard');
+    }
+  };
+
+  const advanceToNext = (currentAppId: string) => {
+    if (!autoAdvance) return;
+    const currentIndex = prioritizedQueue.findIndex((item) => item.app.id === currentAppId);
+    if (currentIndex !== -1 && currentIndex + 1 < prioritizedQueue.length) {
+      setSelectedApp(prioritizedQueue[currentIndex + 1].app);
     }
   };
 
@@ -80,6 +356,11 @@ export default function CallingStationPage() {
     if (!selectedApp) return;
 
     if (outcome === 'CALLBACK') {
+      // Set default callback date to tomorrow
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setCbDate(tomorrow.toISOString().split('T')[0]);
+      setCbReason('Candidate requested callback');
       setShowCallbackModal(true);
       return;
     }
@@ -93,27 +374,42 @@ export default function CallingStationPage() {
           applicationId: selectedApp.id,
           candidateId: selectedApp.candidateId,
           callOutcome: outcome,
-          remarks: remarks || `Outcome marked as ${outcome}`,
+          remarks: remarks || `Call outcome recorded as ${outcome}`,
         }),
       });
 
-      if (res.ok) {
-        setRemarks('');
-        await fetchCallingQueue();
+      const d = await res.json();
+      if (!res.ok) {
+        showToast(d.error || 'Failed to log call outcome', 'error');
+        setSubmitting(false);
+        return;
       }
+
+      showToast(`Call logged as ${outcome.replace(/_/g, ' ')}!`);
+      const currentId = selectedApp.id;
+
+      // Refresh applications and call history
+      await fetchInitialData();
+      if (currentId) {
+        await fetchCallHistory(currentId, selectedApp.candidateId);
+      }
+
+      advanceToNext(currentId);
     } catch (err) {
-      console.error('Error logging outcome', err);
+      showToast('Network error while logging call', 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleScheduleCallback = async () => {
+  const handleScheduleCallback = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!selectedApp || !cbDate) return;
-    setSubmitting(true);
 
+    setSubmitting(true);
     try {
-      const scheduledDateTime = new Date(`${cbDate}T${cbTime}:00`).toISOString();
+      const scheduledDateTime = new Date(`${cbDate}T${cbTime}:00`);
+
       const res = await fetch('/api/calling/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -121,416 +417,836 @@ export default function CallingStationPage() {
           applicationId: selectedApp.id,
           candidateId: selectedApp.candidateId,
           callOutcome: 'CALLBACK',
+          remarks: remarks || cbReason || 'Callback scheduled',
           callbackRequired: true,
-          callbackDateTime: scheduledDateTime,
-          callbackReason: cbReason || 'Candidate follow-up requested',
+          callbackDateTime: scheduledDateTime.toISOString(),
+          callbackReason: cbReason,
           callbackPriority: cbPriority,
-          remarks: `Callback scheduled for ${cbDate} ${cbTime}`,
         }),
       });
 
-      if (res.ok) {
-        setShowCallbackModal(false);
-        setCbDate('');
-        setCbReason('');
-        await fetchCallingQueue();
+      const d = await res.json();
+      if (!res.ok) {
+        showToast(d.error || 'Failed to schedule callback', 'error');
+        setSubmitting(false);
+        return;
       }
+
+      setShowCallbackModal(false);
+      showToast('Callback scheduled successfully!');
+      const currentId = selectedApp.id;
+
+      await fetchInitialData();
+      advanceToNext(currentId);
     } catch (err) {
-      console.error('Error scheduling callback', err);
+      showToast('Connection error while scheduling callback', 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const candidate = selectedApp?.candidate;
-  const job = selectedApp?.job;
-
   const getWhatsAppMessageText = () => {
-    if (!candidate || !job) return '';
-    if (whatsAppType === 'FORM') {
-      return `Hello ${candidate.fullName},\n\nThank you for speaking with Genius Consultancy regarding the *${job.jobTitle}* opening at *${selectedApp.company.companyName}*.\n\nPlease complete your candidate application form using the link below:\nhttps://forms.gle/sample-form\n\nKindly share your CV on this WhatsApp number once completed.\n\nBest Regards,\nGenius Consultancy`;
+    if (!selectedApp) return '';
+    const cName = selectedApp.candidate.fullName;
+    const jTitle = selectedApp.job.jobTitle;
+    const cNameComp = selectedApp.company.companyName;
+
+    switch (whatsAppType) {
+      case 'FORM':
+        return `Hello ${cName},
+
+Thank you for speaking with Genius Consultancy regarding the *${jTitle}* opening at *${cNameComp}*.
+
+Please complete your official candidate application form using the secure link below:
+https://geniusconsultancy.in/form/${selectedApp.applicationCode}
+
+Kindly share your confirmation here once submitted.
+
+Best Regards,
+Genius Consultancy Operations`;
+      case 'CV_REQUEST':
+        return `Hello ${cName},
+
+We have received your profile for *${jTitle}* at *${cNameComp}*. Please share your updated CV / Resume document directly on this WhatsApp chat for immediate screening review.
+
+Thank you,
+Genius Consultancy Team`;
+      case 'INTERVIEW_INVITE':
+        return `Congratulations ${cName}!
+
+Your profile has been shortlisted for an in-person interview for the *${jTitle}* position at *${cNameComp}*.
+
+📅 Date & Time: Tomorrow 11:00 AM
+📍 Venue: Company Office
+
+Please carry 2 copies of your updated resume and ID proof.
+
+Best of luck,
+Genius Consultancy`;
+      default:
+        return '';
     }
-    if (whatsAppType === 'CV_REQUEST') {
-      return `Hello ${candidate.fullName},\n\nWe have received your details for *${job.jobTitle}*. Please share a clear PDF/image of your CV/Resume here on WhatsApp for internal screening.\n\nThank you,\nGenius Consultancy`;
-    }
-    return `Hello ${candidate.fullName},\n\nYour profile has been shortlisted for an interview for *${job.jobTitle}* at *${selectedApp.company.companyName}*. Please carry your resume, Aadhar Card, and Driving License.\n\nRegards,\nGenius Consultancy`;
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 select-none">
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-2 duration-200 ${
+            toast.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          {toast.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          )}
+          <span>{toast.message}</span>
+        </div>
+      )}
+
       {/* Header Banner */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-semibold text-teal-600 uppercase tracking-wider">
-            CALLING STATION (HEYO EXTERNAL DIALER)
-          </span>
-          <h2 className="text-lg font-bold text-slate-900 mt-0.5">Executive Outreach Workspace</h2>
-          <p className="text-xs text-slate-500">
-            Dial candidate on HEYO, then click outcome buttons to update CRM state instantly.
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-teal-600 uppercase tracking-wider">
+              RECRUITMENT OPERATIONS
+            </span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-teal-100 text-teal-800 flex items-center gap-1">
+              <PhoneCall className="w-3 h-3" />
+              Manual Dialing Workspace
+            </span>
+          </div>
+          <h1 className="text-xl font-bold text-slate-900 mt-1 flex items-center gap-2">
+            Executive Calling Workspace
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Work your assigned candidates, make calls using your external phone/dialer, and record the outcome in CRM.
           </p>
         </div>
 
-        {/* Counter Pills */}
-        <div className="flex items-center gap-2">
-          <div className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-center">
-            <span className="text-[10px] text-slate-500 block uppercase font-semibold">Queue Total</span>
-            <span className="text-sm font-bold text-slate-900">{applications.length}</span>
-          </div>
-          <div className="px-3 py-1.5 bg-teal-50 border border-teal-200 rounded-lg text-center">
-            <span className="text-[10px] text-teal-600 block uppercase font-semibold">Shortlisted</span>
-            <span className="text-sm font-bold text-teal-700">
-              {applications.filter((a) => a.currentStage === 'SHORTLISTED').length}
-            </span>
-          </div>
+        {/* Right Header Controls */}
+        <div className="flex items-center gap-3">
+          {/* Auto Advance Toggle */}
+          <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors">
+            <input
+              type="checkbox"
+              checked={autoAdvance}
+              onChange={(e) => setAutoAdvance(e.target.checked)}
+              className="rounded text-teal-600 focus:ring-teal-500"
+            />
+            <span>Auto-Advance Queue</span>
+          </label>
+
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing || loading}
+            className="p-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-xs flex items-center gap-1 font-medium"
+            title="Refresh Queue"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-teal-600' : ''}`} />
+          </button>
         </div>
       </div>
 
-      {/* Main Calling Layout: Queue on Left, Active Candidate on Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Queue List (4 cols) */}
-        <div className="lg:col-span-4 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col h-[720px] overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-700">Assigned Leads Queue</span>
-            <span className="text-[11px] text-slate-400 font-medium">{applications.length} leads</span>
-          </div>
+      {/* Top Summary Queue Metrics */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+          <div className="text-[11px] font-medium text-slate-500">Assigned Queue</div>
+          <div className="text-xl font-bold text-slate-900 mt-0.5">{metrics.total}</div>
+        </div>
 
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-            {applications.map((app) => (
+        <div className="bg-white rounded-xl border border-amber-200 bg-amber-50/30 p-3.5 shadow-sm">
+          <div className="text-[11px] font-semibold text-amber-800 flex items-center gap-1">
+            <CalendarClock className="w-3 h-3 text-amber-600" />
+            Callbacks Due
+          </div>
+          <div className="text-xl font-bold text-amber-700 mt-0.5">{metrics.callbacksDue}</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-sky-200 bg-sky-50/30 p-3.5 shadow-sm">
+          <div className="text-[11px] font-semibold text-sky-800">Follow-ups Due</div>
+          <div className="text-xl font-bold text-sky-700 mt-0.5">{metrics.followupsDue}</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm">
+          <div className="text-[11px] font-medium text-slate-500">Worked Today</div>
+          <div className="text-xl font-bold text-slate-800 mt-0.5">{metrics.workedToday}</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-teal-200 bg-teal-50/30 p-3.5 shadow-sm">
+          <div className="text-[11px] font-semibold text-teal-800">Connected / Active</div>
+          <div className="text-xl font-bold text-teal-700 mt-0.5">{metrics.connectedCount}</div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-purple-200 bg-purple-50/30 p-3.5 shadow-sm">
+          <div className="text-[11px] font-semibold text-purple-800">Shortlisted</div>
+          <div className="text-xl font-bold text-purple-700 mt-0.5">{metrics.shortlistedCount}</div>
+        </div>
+      </div>
+
+      {/* Main Calling Workspace Split Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* ========================================================================= */}
+        {/* LEFT COLUMN: PRIORITIZED CALLING QUEUE (5 Columns) */}
+        {/* ========================================================================= */}
+        <div className="lg:col-span-5 flex flex-col space-y-3">
+          {/* Queue Filter Tabs */}
+          <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2.5">
+            <div className="flex flex-wrap gap-1 border-b border-slate-100 pb-2 text-[11px]">
               <button
-                key={app.id}
-                onClick={() => setSelectedApp(app)}
-                className={`w-full p-3.5 text-left transition-all flex items-start justify-between ${
-                  selectedApp?.id === app.id ? 'bg-teal-50/80 border-l-4 border-teal-600' : 'hover:bg-slate-50'
+                onClick={() => setActiveTab('ALL')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                  activeTab === 'ALL'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-900">{app.candidate?.fullName}</span>
-                    <StageBadge stage={app.currentStage} />
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-                    <Building2 className="w-3 h-3 text-slate-400" />
-                    <span>{app.job?.jobTitle}</span>
-                  </p>
-                  <p className="text-[11px] font-mono text-slate-600 mt-0.5">{app.candidate?.normalizedPhone}</p>
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-300 mt-1 shrink-0" />
+                All ({applications.length})
               </button>
-            ))}
+              <button
+                onClick={() => setActiveTab('CALLBACKS_DUE')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                  activeTab === 'CALLBACKS_DUE'
+                    ? 'bg-amber-600 text-white'
+                    : 'text-amber-700 bg-amber-50 hover:bg-amber-100'
+                }`}
+              >
+                Callbacks ({callbacks.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('FOLLOWUPS_DUE')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                  activeTab === 'FOLLOWUPS_DUE'
+                    ? 'bg-sky-600 text-white'
+                    : 'text-sky-700 bg-sky-50 hover:bg-sky-100'
+                }`}
+              >
+                Follow-ups
+              </button>
+              <button
+                onClick={() => setActiveTab('NEW_ASSIGNED')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                  activeTab === 'NEW_ASSIGNED'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-purple-700 bg-purple-50 hover:bg-purple-100'
+                }`}
+              >
+                New Leads
+              </button>
+              <button
+                onClick={() => setActiveTab('NOT_WORKED')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                  activeTab === 'NOT_WORKED'
+                    ? 'bg-rose-600 text-white'
+                    : 'text-rose-700 bg-rose-50 hover:bg-rose-100'
+                }`}
+              >
+                Unworked
+              </button>
+            </div>
+
+            {/* Search & Dropdown Filters */}
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search candidate, phone, code..."
+                  className="w-full pl-8 pr-2.5 py-1.5 border border-slate-200 rounded-lg text-xs outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={jobFilter}
+                  onChange={(e) => setJobFilter(e.target.value)}
+                  className="px-2 py-1.5 border border-slate-200 rounded-lg text-[11px] text-slate-700 outline-none bg-white truncate"
+                >
+                  <option value="ALL">All Jobs ({uniqueJobs.length})</option>
+                  {uniqueJobs.map((j) => (
+                    <option key={j.id} value={j.id}>
+                      {j.title}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={companyFilter}
+                  onChange={(e) => setCompanyFilter(e.target.value)}
+                  className="px-2 py-1.5 border border-slate-200 rounded-lg text-[11px] text-slate-700 outline-none bg-white truncate"
+                >
+                  <option value="ALL">All Companies ({uniqueCompanies.length})</option>
+                  {uniqueCompanies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Queue Cards List */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-[520px] max-h-[640px]">
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs font-semibold text-slate-700">
+              <span>Prioritized Queue ({prioritizedQueue.length})</span>
+              <span className="text-[11px] text-slate-500 font-normal">Sorted by urgency</span>
+            </div>
+
+            <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
+              {loading ? (
+                <div className="py-16 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-2">
+                  <RefreshCw className="w-5 h-5 animate-spin text-teal-600" />
+                  <span>Loading calling queue...</span>
+                </div>
+              ) : prioritizedQueue.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-xs">
+                  No candidates in this queue view.
+                </div>
+              ) : (
+                prioritizedQueue.map(({ app, callback, tag, tagVariant }) => {
+                  const isSelected = selectedApp?.id === app.id;
+                  return (
+                    <div
+                      key={app.id}
+                      onClick={() => setSelectedApp(app)}
+                      className={`p-3 cursor-pointer transition-all flex flex-col gap-1.5 border-l-4 ${
+                        isSelected
+                          ? 'bg-teal-50/90 border-teal-600 shadow-sm'
+                          : 'hover:bg-slate-50 border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                            <span>{app.candidate.fullName}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              #{app.applicationCode}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-600 font-medium truncate max-w-[220px]">
+                            {app.job.jobTitle} • <span className="text-slate-500">{app.company.companyName}</span>
+                          </div>
+                        </div>
+
+                        <Badge variant={tagVariant}>{tag}</Badge>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[11px] text-slate-500 mt-0.5">
+                        <div className="font-mono font-semibold text-slate-700">
+                          {app.candidate.phone}
+                        </div>
+                        <StageBadge stage={app.currentStage} />
+                      </div>
+
+                      {callback && (
+                        <div className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded flex items-center justify-between">
+                          <span className="font-medium">Callback:</span>
+                          <span className="font-mono font-semibold">
+                            {new Date(callback.scheduledAt).toLocaleString([], {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Right Active Lead Action Panel (8 cols) */}
-        <div className="lg:col-span-8 space-y-6">
-          {selectedApp && candidate ? (
+        {/* ========================================================================= */}
+        {/* RIGHT COLUMN: ACTIVE CANDIDATE CALLING CARD (7 Columns) */}
+        {/* ========================================================================= */}
+        <div className="lg:col-span-7 flex flex-col space-y-4">
+          {selectedApp ? (
             <>
-              {/* Candidate Info Card */}
-              <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-                <div className="flex items-start justify-between pb-4 border-b border-slate-100">
+              {/* Candidate Calling Card */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-5">
+                {/* Header & Prominent Phone Number Banner */}
+                <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div>
-                    <div className="flex items-center gap-3">
-                      <h3 className="text-lg font-bold text-slate-900">{candidate.fullName}</h3>
-                      <StageBadge stage={selectedApp.currentStage} />
-                      <span className="text-xs font-mono text-slate-400">{candidate.candidateCode}</span>
+                    <div className="text-xs text-slate-300 flex items-center gap-2">
+                      <span>#{selectedApp.applicationCode}</span>
+                      <span>•</span>
+                      <span className="text-teal-400 font-semibold">
+                        {selectedApp.job.jobTitle}
+                      </span>
                     </div>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Applied for <strong className="text-slate-800">{job?.jobTitle}</strong> at{' '}
-                      <strong className="text-slate-800">{selectedApp.company?.companyName}</strong>
-                    </p>
+                    <div className="text-xl font-bold text-white mt-0.5">
+                      {selectedApp.candidate.fullName}
+                    </div>
+                    <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+                      <Building2 className="w-3.5 h-3.5" />
+                      <span>{selectedApp.company.companyName}</span>
+                    </div>
                   </div>
 
-                  {/* Phone & HEYO Dial Helper */}
-                  <div className="flex items-center gap-2">
-                    <div className="px-3 py-2 bg-slate-900 text-white rounded-xl font-mono text-sm font-bold flex items-center gap-2">
-                      <PhoneCall className="w-4 h-4 text-teal-400" />
-                      <span>{candidate.normalizedPhone}</span>
+                  {/* Prominent Copyable Phone Box */}
+                  <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 flex items-center gap-3">
+                    <div>
+                      <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+                        Candidate Phone
+                      </div>
+                      <div className="text-lg font-mono font-bold text-teal-300">
+                        {selectedApp.candidate.phone}
+                      </div>
                     </div>
-                    <button
-                      onClick={() => handleCopy(candidate.normalizedPhone, true)}
-                      className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors"
-                      title="Copy Phone Number for HEYO dialer"
+
+                    <div className="flex flex-col gap-1">
+                      <button
+                        onClick={() => handleCopy(selectedApp.candidate.phone, true)}
+                        className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm"
+                        title="Copy phone number"
+                      >
+                        {copiedPhone ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedPhone ? 'Copied!' : 'Copy'}</span>
+                      </button>
+
+                      <a
+                        href={`tel:${selectedApp.candidate.phone}`}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium flex items-center gap-1 transition-colors text-center justify-center"
+                        title="Open device dialer to call externally (does not log call automatically)"
+                      >
+                        <PhoneCall className="w-3 h-3 text-teal-400" />
+                        <span>Call Externally</span>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Candidate Operational Attributes Grid */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Experience</span>
+                    <span className="font-bold text-slate-800">
+                      {selectedApp.candidate.experienceYears ?? 0}y {selectedApp.candidate.experienceMonths ?? 0}m
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Current Company</span>
+                    <span className="font-semibold text-slate-800 truncate block">
+                      {selectedApp.candidate.currentCompany || 'Not specified'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Current CTC</span>
+                    <span className="font-bold text-slate-800">
+                      {selectedApp.candidate.currentSalary ? `₹${selectedApp.candidate.currentSalary.toLocaleString()}` : 'N/A'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Expected CTC</span>
+                    <span className="font-bold text-teal-700">
+                      {selectedApp.candidate.expectedSalary ? `₹${selectedApp.candidate.expectedSalary.toLocaleString()}` : 'Negotiable'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Location</span>
+                    <span className="font-semibold text-slate-800">
+                      {selectedApp.candidate.currentLocation || 'Not specified'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Current Stage</span>
+                    <div className="mt-0.5"><StageBadge stage={selectedApp.currentStage} /></div>
+                  </div>
+
+                  <div className="col-span-2 flex items-center gap-3 pt-1">
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${
+                        selectedApp.candidate.hasTwoWheeler
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-200 text-slate-600'
+                      }`}
                     >
-                      {copiedPhone ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-                    </button>
+                      <Bike className="w-3.5 h-3.5" />
+                      {selectedApp.candidate.hasTwoWheeler ? 'Has 2-Wheeler' : 'No Bike'}
+                    </span>
+
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${
+                        selectedApp.candidate.hasDrivingLicense
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      {selectedApp.candidate.hasDrivingLicense ? 'Driving License' : 'No License'}
+                    </span>
+
                     <button
                       onClick={() => setShowWhatsAppModal(true)}
-                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5 shadow-sm"
+                      className="ml-auto px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
                     >
-                      <MessageSquare className="w-4 h-4" />
-                      <span>Copy WhatsApp Msg</span>
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>WhatsApp</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Candidate Attributes Grid */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-4 border-b border-slate-100 text-xs">
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Location</span>
-                    <span className="font-semibold text-slate-800">{candidate.currentLocation || 'N/A'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Experience</span>
-                    <span className="font-semibold text-slate-800">{candidate.experienceYears} Years</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Education</span>
-                    <span className="font-semibold text-slate-800">{candidate.education || 'Graduate'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Current Role</span>
-                    <span className="font-semibold text-slate-800">{candidate.currentJob || 'Fresher'}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">2-Wheeler Readiness</span>
-                    <span className="font-semibold text-emerald-700 flex items-center gap-1">
-                      <Bike className="w-3.5 h-3.5" />
-                      {candidate.hasTwoWheeler ? 'Has Bike' : 'No Bike'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Driving License</span>
-                    <span className="font-semibold text-emerald-700 flex items-center gap-1">
-                      <CreditCard className="w-3.5 h-3.5" />
-                      {candidate.hasDrivingLicense ? 'Has License' : 'No License'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Expected Salary</span>
-                    <span className="font-semibold text-slate-800">
-                      {candidate.expectedSalary ? `₹${candidate.expectedSalary}` : 'As per industry'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[11px]">Form / CV Status</span>
-                    <span className="font-semibold text-purple-700">
-                      Form: {selectedApp.formStatus} | CV: {selectedApp.cvStatus}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Remarks Input */}
-                <div className="pt-4">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                    Call Notes / Candidate Remarks
+                {/* Call Notes Textarea */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1 flex items-center justify-between">
+                    <span>Call Observations & Remarks</span>
+                    <span className="text-[11px] text-slate-400 font-normal">Recorded with call log</span>
                   </label>
                   <textarea
                     rows={2}
                     value={remarks}
                     onChange={(e) => setRemarks(e.target.value)}
-                    placeholder="Enter discussion notes, salary expectations, language skills..."
-                    className="w-full p-2.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-slate-50"
+                    placeholder="Type candidate response, salary discussion, notice period, location preference, or callback reason..."
+                    className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
                   />
+                </div>
+
+                {/* FAST CALL OUTCOME BUTTONS GRID */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      Record Call Interaction Outcome
+                    </label>
+                    <span className="text-[10px] text-slate-400">
+                      Creates CallLog & updates operational activity
+                    </span>
+                  </div>
+
+                  {/* Positive / Stage Advancing Outcomes */}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <button
+                        onClick={() => handleLogOutcome('CONNECTED')}
+                        disabled={submitting}
+                        className="p-2.5 bg-teal-50 hover:bg-teal-100 border border-teal-300 text-teal-800 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                      >
+                        <PhoneCall className="w-4 h-4 text-teal-600" />
+                        <span>Connected</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('SHORTLISTED')}
+                        disabled={submitting}
+                        className="p-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                      >
+                        <Sparkles className="w-4 h-4 text-purple-200" />
+                        <span>Shortlisted</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('INTERESTED')}
+                        disabled={submitting}
+                        className="p-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                      >
+                        <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                        <span>Interested</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('CALLBACK')}
+                        disabled={submitting}
+                        className="p-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                      >
+                        <CalendarClock className="w-4 h-4 text-amber-200" />
+                        <span>Schedule Callback</span>
+                      </button>
+                    </div>
+
+                    {/* Unreachable / Busy Outcomes */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        onClick={() => handleLogOutcome('RNR')}
+                        disabled={submitting}
+                        className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                      >
+                        <PhoneOff className="w-3.5 h-3.5 text-slate-500" />
+                        <span>RNR (No Response)</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('BUSY')}
+                        disabled={submitting}
+                        className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                      >
+                        <PhoneForwarded className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Line Busy</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('SWITCHED_OFF')}
+                        disabled={submitting}
+                        className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                      >
+                        <PhoneOff className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Switched Off</span>
+                      </button>
+                    </div>
+
+                    {/* Disqualification Outcomes */}
+                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100">
+                      <button
+                        onClick={() => handleLogOutcome('NOT_INTERESTED')}
+                        disabled={submitting}
+                        className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                      >
+                        <span>Not Interested</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('NOT_ELIGIBLE')}
+                        disabled={submitting}
+                        className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                      >
+                        <span>Not Eligible</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleLogOutcome('WRONG_NUMBER')}
+                        disabled={submitting}
+                        className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                      >
+                        <span>Wrong Number</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Fast Action Buttons Grid */}
-              <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                <p className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3">
-                  Log External Call Outcome
-                </p>
+              {/* Chronological Call History Timeline */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <div className="flex items-center gap-2">
+                    <History className="w-4 h-4 text-slate-500" />
+                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      Candidate Call History ({callLogs.length})
+                    </h3>
+                  </div>
+                  {loadingHistory && (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-600" />
+                  )}
+                </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('CONNECTED')}
-                    className="p-3 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>CONNECTED</span>
-                    <span className="text-[10px] text-teal-600 font-normal">Call Picked Up</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('SHORTLISTED')}
-                    className="p-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1 shadow-sm"
-                  >
-                    <span>SHORTLIST</span>
-                    <span className="text-[10px] text-purple-200 font-normal">Send Form & CV</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('CALLBACK')}
-                    className="p-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>CALLBACK</span>
-                    <span className="text-[10px] text-amber-600 font-normal">Schedule Follow-up</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('INTERESTED')}
-                    className="p-3 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>INTERESTED</span>
-                    <span className="text-[10px] text-sky-600 font-normal">Positive Response</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('RNR')}
-                    className="p-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>RNR</span>
-                    <span className="text-[10px] text-slate-500 font-normal">Ringing No Response</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('NOT_INTERESTED')}
-                    className="p-3 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>NOT INTERESTED</span>
-                    <span className="text-[10px] text-rose-600 font-normal">Declined Opening</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('NOT_ELIGIBLE')}
-                    className="p-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>NOT ELIGIBLE</span>
-                    <span className="text-[10px] text-slate-500 font-normal">No Bike / DL / Criteria</span>
-                  </button>
-
-                  <button
-                    disabled={submitting}
-                    onClick={() => handleLogOutcome('WRONG_NUMBER')}
-                    className="p-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition-colors flex flex-col items-center justify-center gap-1"
-                  >
-                    <span>WRONG NUMBER</span>
-                    <span className="text-[10px] text-slate-500 font-normal">Invalid / Switched Off</span>
-                  </button>
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1 divide-y divide-slate-100">
+                  {callLogs.length === 0 ? (
+                    <div className="py-6 text-center text-slate-400 text-xs">
+                      No calls logged yet for this candidate.
+                    </div>
+                  ) : (
+                    callLogs.map((log) => (
+                      <div key={log.id} className="pt-2 first:pt-0 text-xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <Badge variant={log.callOutcome === 'SHORTLISTED' || log.callOutcome === 'INTERESTED' ? 'success' : log.callOutcome === 'CALLBACK' ? 'warning' : 'neutral'}>
+                              {log.callOutcome.replace(/_/g, ' ')}
+                            </Badge>
+                            <span className="text-[11px] text-slate-500">
+                              by {log.executive?.fullName || 'Executive'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {new Date(log.createdAt).toLocaleString([], {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                        {log.remarks && (
+                          <p className="text-[11px] text-slate-700 bg-slate-50 p-1.5 rounded border border-slate-100">
+                            {log.remarks}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </>
           ) : (
-            <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
-              No lead selected
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-16 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-3">
+              <PhoneCall className="w-8 h-8 text-slate-300" />
+              <p>Select a candidate from the prioritized queue on the left to begin calling.</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Callback Scheduler Modal */}
+      {/* ========================================================================= */}
+      {/* CALLBACK SCHEDULING MODAL */}
+      {/* ========================================================================= */}
       <Modal
         isOpen={showCallbackModal}
         onClose={() => setShowCallbackModal(false)}
-        title="Schedule Follow-up Callback"
-        subtitle={`Schedule callback for ${candidate?.fullName} (${candidate?.normalizedPhone})`}
+        title="Schedule Candidate Callback"
+        subtitle={`Set follow-up reminder for ${selectedApp?.candidate.fullName || 'Candidate'}`}
+        maxWidth="md"
       >
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+        <form onSubmit={handleScheduleCallback} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Callback Date</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Callback Date <span className="text-rose-500">*</span>
+              </label>
               <input
                 type="date"
                 required
                 value={cbDate}
                 onChange={(e) => setCbDate(e.target.value)}
-                className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+                className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
               />
             </div>
+
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Callback Time</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Callback Time <span className="text-rose-500">*</span>
+              </label>
               <input
                 type="time"
+                required
                 value={cbTime}
                 onChange={(e) => setCbTime(e.target.value)}
-                className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+                className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Priority</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Priority Level
+            </label>
             <select
               value={cbPriority}
               onChange={(e) => setCbPriority(e.target.value as any)}
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+              className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white"
             >
-              <option value="HIGH">High Priority</option>
-              <option value="MEDIUM">Medium Priority</option>
-              <option value="LOW">Low Priority</option>
+              <option value="HIGH">HIGH - Urgent Interested Lead</option>
+              <option value="MEDIUM">MEDIUM - Standard Callback</option>
+              <option value="LOW">LOW - Follow-up if time permits</option>
             </select>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Callback Reason / Notes</label>
-            <input
-              type="text"
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Callback Reason / Notes
+            </label>
+            <textarea
+              rows={2}
               value={cbReason}
               onChange={(e) => setCbReason(e.target.value)}
-              placeholder="e.g. Call back after 2 PM to confirm field sales interest"
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+              placeholder="e.g. Candidate was in office meeting, asked to call tomorrow 2 PM."
+              className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
             />
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
             <button
+              type="button"
               onClick={() => setShowCallbackModal(false)}
-              className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-medium"
+              className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-50"
             >
               Cancel
             </button>
             <button
-              onClick={handleScheduleCallback}
-              disabled={!cbDate || submitting}
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50"
+              type="submit"
+              disabled={submitting || !cbDate}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 flex items-center gap-1.5"
             >
-              Confirm Callback
+              {submitting ? 'Scheduling...' : 'Save & Schedule Callback'}
             </button>
           </div>
-        </div>
+        </form>
       </Modal>
 
-      {/* WhatsApp Message Generator Modal */}
+      {/* ========================================================================= */}
+      {/* WHATSAPP TEMPLATES MODAL */}
+      {/* ========================================================================= */}
       <Modal
         isOpen={showWhatsAppModal}
         onClose={() => setShowWhatsAppModal(false)}
-        title="WhatsApp Message Template"
-        subtitle="Copy formatted text to manually paste into WhatsApp"
+        title="WhatsApp Quick Templates"
+        subtitle="Copy ready-made message templates to send to candidate via external WhatsApp"
+        maxWidth="lg"
       >
-        <div className="space-y-4">
-          <div className="flex gap-2">
+        <div className="space-y-4 text-xs">
+          <div className="flex gap-2 border-b border-slate-100 pb-2">
             <button
+              type="button"
               onClick={() => setWhatsAppType('FORM')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                whatsAppType === 'FORM' ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'
+              className={`px-3 py-1.5 rounded-lg font-semibold transition-colors ${
+                whatsAppType === 'FORM'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              Candidate Form Link
+              1. Screening Form Link
             </button>
             <button
+              type="button"
               onClick={() => setWhatsAppType('CV_REQUEST')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                whatsAppType === 'CV_REQUEST' ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'
+              className={`px-3 py-1.5 rounded-lg font-semibold transition-colors ${
+                whatsAppType === 'CV_REQUEST'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              CV / Resume Request
+              2. CV / Resume Request
             </button>
             <button
+              type="button"
               onClick={() => setWhatsAppType('INTERVIEW_INVITE')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                whatsAppType === 'INTERVIEW_INVITE' ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'
+              className={`px-3 py-1.5 rounded-lg font-semibold transition-colors ${
+                whatsAppType === 'INTERVIEW_INVITE'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              Interview Invite
+              3. Interview Invite
             </button>
           </div>
 
-          <div className="p-4 bg-slate-900 text-emerald-300 font-mono text-xs rounded-xl whitespace-pre-wrap leading-relaxed">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 font-mono text-xs whitespace-pre-wrap text-slate-800">
             {getWhatsAppMessageText()}
           </div>
 
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => handleCopy(getWhatsAppMessageText(), false)}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm"
-            >
-              {copiedMsg ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              <span>{copiedMsg ? 'Copied to Clipboard!' : 'Copy WhatsApp Message'}</span>
-            </button>
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <div className="text-[11px] text-slate-500">
+              Target: <span className="font-mono font-semibold text-slate-800">{selectedApp?.candidate.phone}</span>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowWhatsAppModal(false)}
+                className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleCopy(getWhatsAppMessageText(), false)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                {copiedMsg ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedMsg ? 'Copied to Clipboard!' : 'Copy Template Message'}</span>
+              </button>
+            </div>
           </div>
         </div>
       </Modal>

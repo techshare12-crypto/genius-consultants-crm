@@ -842,8 +842,8 @@ export default function AdminEmployeesPage() {
         isOpen={showEditModal}
         onClose={() => setShowEditModal(false)}
         title={`Edit Employee: ${selectedEmployee?.fullName || ''}`}
-        subtitle="Update employee contact info, team, account status, and role assignments"
-        maxWidth="xl"
+        subtitle="Update profile details, status, team, and multi-role assignments"
+        maxWidth="lg"
       >
         <form onSubmit={handleUpdateEmployee} className="space-y-4">
           {formError && (

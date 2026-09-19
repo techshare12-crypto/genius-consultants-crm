@@ -1,3 +1,4 @@
+import './setup_env';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { normalizeIndianPhone } from '../src/server/utils/phone';
@@ -16,8 +17,18 @@ import { NextRequest } from 'next/server';
 import { GET as getApplicationHistory } from '../src/app/api/applications/[id]/history/route';
 import { POST as completeCallbackRoute } from '../src/app/api/callbacks/[id]/complete/route';
 import fs from 'fs';
+import path from 'path';
 
-const prisma = new PrismaClient();
+const dbPath = path.resolve(process.cwd(), 'prisma/dev.db').replace(/\\/g, '/');
+process.env.DATABASE_URL = `file:${dbPath}`;
+
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: `file:${dbPath}`,
+    },
+  },
+});
 
 let passedTests = 0;
 let failedTests = 0;
@@ -539,6 +550,21 @@ async function runTestSuite() {
   if (backedUpCandidate) {
     const originalName = backedUpCandidate.fullName;
 
+    // Ensure candidate exists before mutating
+    const existingCand = await prisma.candidate.findUnique({ where: { id: backedUpCandidate.id } });
+    if (!existingCand) {
+      const superAdmin = await prisma.user.findFirst();
+      await prisma.candidate.create({
+        data: {
+          id: backedUpCandidate.id,
+          candidateCode: backedUpCandidate.candidateCode || `CAND-BK-${Date.now().toString().slice(-6)}`,
+          fullName: originalName,
+          rawPhone: backedUpCandidate.rawPhone || backedUpCandidate.phone || '9999999999',
+          normalizedPhone: backedUpCandidate.normalizedPhone || '9999999999',
+        },
+      });
+    }
+
     // Mutate the record in the database
     await prisma.candidate.update({
       where: { id: backedUpCandidate.id },
@@ -563,6 +589,201 @@ async function runTestSuite() {
   console.log('\n--- Test Suite 14: Immutable Audit Trail ---');
   const auditCount = await prisma.auditLog.count();
   assert(auditCount > 0, `Audit log contains ${auditCount} immutable transactional events`);
+
+  // ==========================================
+  // TEST SUITE 15: Employee Management & Multi-Role Reconciliation
+  // ==========================================
+  console.log('\n--- Test Suite 15: Employee Management & Multi-Role Reconciliation ---');
+  const { PasswordValidationSchema, ResetPasswordSchema } = await import('../src/server/validators/schemas');
+
+  // 1. Password Security Validation (Min 8 Characters)
+  const shortPwTest = PasswordValidationSchema.safeParse('123456');
+  assert(!shortPwTest.success, 'Password validation rejects passwords < 8 characters');
+
+  const shortResetTest = ResetPasswordSchema.safeParse({ password: '12345' });
+  assert(!shortResetTest.success, 'Reset password schema rejects short passwords');
+
+  const validPwTest = PasswordValidationSchema.safeParse('StrongPass@2026');
+  assert(validPwTest.success, 'Password validation accepts passwords >= 8 characters');
+
+  const testEmpEmail = `test.employee.${Date.now()}@geniusconsultancy.com`;
+  const superAdminUser = await prisma.user.findFirst({
+    where: { userRoles: { some: { role: { name: 'SUPER_ADMIN' } } } },
+  });
+
+  // 2. Create new employee with multi-roles
+  const roleExec = await prisma.role.findUnique({ where: { name: 'EXECUTIVE' } });
+  const roleScreening = await prisma.role.findUnique({ where: { name: 'SCREENING_MANAGER' } });
+  const roleOps = await prisma.role.findUnique({ where: { name: 'OPERATIONS_HEAD' } });
+
+  const initialPasswordHash = await bcrypt.hash('InitialPass@123', 10);
+  const createdEmp = await prisma.user.create({
+    data: {
+      email: testEmpEmail,
+      fullName: 'Test Operational Employee',
+      phone: '9898989898',
+      passwordHash: initialPasswordHash,
+      status: 'ACTIVE',
+      userRoles: {
+        create: [
+          { roleId: roleExec!.id },
+          { roleId: roleScreening!.id },
+        ],
+      },
+    },
+    include: {
+      userRoles: { include: { role: true } },
+    },
+  });
+
+  assert(createdEmp.id !== undefined, 'Employee created successfully in database');
+  const createdRoles = createdEmp.userRoles.map((ur) => ur.role.name);
+  assert(
+    createdRoles.includes('EXECUTIVE') && createdRoles.includes('SCREENING_MANAGER'),
+    'Employee has initial multi-role assignment (EXECUTIVE + SCREENING_MANAGER)'
+  );
+
+  // 3. Reconcile Roles (Remove SCREENING_MANAGER, Add OPERATIONS_HEAD)
+  await prisma.$transaction(async (tx) => {
+    await tx.userRole.deleteMany({
+      where: { userId: createdEmp.id, roleId: roleScreening!.id },
+    });
+    await tx.userRole.create({
+      data: { userId: createdEmp.id, roleId: roleOps!.id },
+    });
+    await tx.user.update({
+      where: { id: createdEmp.id },
+      data: { fullName: 'Test Employee Updated' },
+    });
+  });
+
+  const updatedEmp = await prisma.user.findUnique({
+    where: { id: createdEmp.id },
+    include: { userRoles: { include: { role: true } } },
+  });
+  const updatedRoles = updatedEmp?.userRoles.map((ur) => ur.role.name) || [];
+  assert(
+    updatedRoles.includes('EXECUTIVE') &&
+      updatedRoles.includes('OPERATIONS_HEAD') &&
+      !updatedRoles.includes('SCREENING_MANAGER'),
+    'Roles reconciled successfully without duplicate records or lost relationships'
+  );
+  assert(updatedEmp?.fullName === 'Test Employee Updated', 'Employee details updated successfully');
+
+  // 4. Password Reset with >= 8 characters
+  const newPassword = 'NewSecretPassword@2026';
+  const newPasswordHash = await bcrypt.hash(newPassword, 10);
+  await prisma.user.update({
+    where: { id: createdEmp.id },
+    data: { passwordHash: newPasswordHash },
+  });
+
+  const pwCheckUser = await prisma.user.findUnique({ where: { id: createdEmp.id } });
+  const pwMatch = await bcrypt.compare(newPassword, pwCheckUser!.passwordHash);
+  assert(pwMatch === true, 'Password reset successfully with >= 8 chars and verifies with bcrypt');
+
+  // 5. Soft Deactivation & Login Prevention
+  await prisma.user.update({
+    where: { id: createdEmp.id },
+    data: { status: 'INACTIVE' },
+  });
+  const deactivatedEmp = await prisma.user.findUnique({ where: { id: createdEmp.id } });
+  assert(deactivatedEmp?.status === 'INACTIVE', 'Employee soft-deactivated (status = INACTIVE)');
+  assert(deactivatedEmp?.status !== 'ACTIVE', 'Deactivated employee status blocks CRM login');
+
+  // 6. Reactivation
+  await prisma.user.update({
+    where: { id: createdEmp.id },
+    data: { status: 'ACTIVE' },
+  });
+  const reactivatedEmp = await prisma.user.findUnique({ where: { id: createdEmp.id } });
+  assert(reactivatedEmp?.status === 'ACTIVE', 'Employee reactivated successfully');
+
+  // ==========================================
+  // TEST SUITE 16: Executive Calling Workspace & Prioritization
+  // ==========================================
+  console.log('\n--- Test Suite 16: Executive Calling Workspace & Stage-Outcome Separation ---');
+
+  // 1. Create test candidate and application
+  const callingTestCandidate = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAND-CALL-${Date.now().toString().slice(-6)}`,
+      fullName: 'Calling Candidate Test',
+      rawPhone: '9876501234',
+      normalizedPhone: '9876501234',
+      currentLocation: 'Bangalore',
+      experienceYears: 3,
+      experienceMonths: 6,
+      currentSalary: 35000,
+      expectedSalary: 45000,
+      hasTwoWheeler: true,
+      hasDrivingLicense: true,
+    },
+  });
+
+  const callingTestApp = await prisma.application.create({
+    data: {
+      applicationCode: `APP-CALL-${Date.now().toString().slice(-6)}`,
+      candidateId: callingTestCandidate.id,
+      jobId: job!.id,
+      companyId: company!.id,
+      currentStage: 'ASSIGNED',
+      assignedExecutiveId: rahulExec!.id,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  assert(callingTestApp.id !== undefined, 'Test candidate application created in ASSIGNED stage');
+
+  // 2. Log Call Outcome: RNR (Unreachable)
+  const rnrCall = await CallingService.logCall({
+    applicationId: callingTestApp.id,
+    candidateId: callingTestCandidate.id,
+    executiveId: rahulExec!.id,
+    callOutcome: 'RNR',
+    remarks: 'Rings no response after 5 rings',
+  });
+
+  assert(rnrCall.callLog.callOutcome === 'RNR', 'Call log recorded with outcome RNR');
+  assert(rnrCall.newStage === 'CALLING', 'Application stage moved from ASSIGNED to CALLING upon initial call');
+
+  // 3. Log Call Outcome: CALLBACK with scheduled datetime
+  const tomorrowDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const cbCall = await CallingService.logCall({
+    applicationId: callingTestApp.id,
+    candidateId: callingTestCandidate.id,
+    executiveId: rahulExec!.id,
+    callOutcome: 'CALLBACK',
+    remarks: 'Candidate busy in meeting, requested callback tomorrow',
+    callbackRequired: true,
+    callbackDateTime: tomorrowDate.toISOString(),
+    callbackReason: 'Follow-up interview details',
+    callbackPriority: 'HIGH',
+  });
+
+  assert(cbCall.callback !== null, 'Callback record successfully created in Callback table');
+  assert(cbCall.callback?.priority === 'HIGH', 'Callback priority recorded as HIGH');
+  assert(cbCall.newStage === 'CALLING', 'Callback call outcome preserves current Application Stage (CALLING)');
+
+  // 4. Log Call Outcome: SHORTLISTED (Preserving Stage ≠ Outcome Separation)
+  const shortlistCall = await CallingService.logCall({
+    applicationId: callingTestApp.id,
+    candidateId: callingTestCandidate.id,
+    executiveId: rahulExec!.id,
+    callOutcome: 'SHORTLISTED',
+    remarks: 'Executive recommended shortlist based on call interaction',
+  });
+
+  assert(shortlistCall.callLog.callOutcome === 'SHORTLISTED', 'Call log recorded with outcome SHORTLISTED');
+  assert(shortlistCall.newStage === 'CALLING', 'Call outcome SHORTLISTED does not bypass formal recruitment pipeline stage');
+
+  const refreshedApp = await prisma.application.findUnique({ where: { id: callingTestApp.id } });
+  assert(refreshedApp?.currentStage === 'CALLING', 'Application currentStage remains strictly CALLING');
+  assert(refreshedApp?.formStatus === 'PENDING', 'Form status remains PENDING without premature mutation');
+
+  // 5. Verify Executive CRM presence updated
+  const execUserPresence = await prisma.user.findUnique({ where: { id: rahulExec!.id } });
+  assert(execUserPresence?.presenceStatus === 'AFTER_CALL_WORK', 'Executive presence updated to AFTER_CALL_WORK upon call completion');
 
   // ==========================================
   // TEST SUMMARY

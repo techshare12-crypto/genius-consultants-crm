@@ -139,6 +139,10 @@ async function runProductionBootstrap() {
         });
       }
 
+      // Pre-fetch permissions to avoid 91 redundant sequential queries inside the transaction
+      const allPermissions = await tx.permission.findMany();
+      const permMap = new Map(allPermissions.map((p) => [p.name, p.id]));
+
       // Step B: Seed System Roles (8 System Roles) & Permission Matrix (91 Mappings)
       console.log('   -> Creating / Verifying system roles and permission matrix...');
       for (const [, roleName] of Object.entries(SYSTEM_ROLES)) {
@@ -154,19 +158,19 @@ async function runProductionBootstrap() {
 
         const assignedPerms = DEFAULT_ROLE_PERMISSIONS[roleName as keyof typeof DEFAULT_ROLE_PERMISSIONS] || [];
         for (const permName of assignedPerms) {
-          const perm = await tx.permission.findUnique({ where: { name: permName } });
-          if (perm) {
+          const permId = permMap.get(permName);
+          if (permId) {
             await tx.rolePermission.upsert({
               where: {
                 roleId_permissionId: {
                   roleId: role.id,
-                  permissionId: perm.id,
+                  permissionId: permId,
                 },
               },
               update: {},
               create: {
                 roleId: role.id,
-                permissionId: perm.id,
+                permissionId: permId,
               },
             });
           }
@@ -294,7 +298,7 @@ async function runProductionBootstrap() {
         }
       }
     },
-    { timeout: 60000 }
+    { maxWait: 20000, timeout: 180000 }
   );
 
   console.log('\n================================================================================');

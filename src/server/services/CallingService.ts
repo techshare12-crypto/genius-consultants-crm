@@ -78,29 +78,22 @@ export class CallingService {
       }
 
       // 4. State Transition Logic
+      // ARCHITECTURAL RULE: Application Stage ≠ Call Outcome ≠ Callback Status.
+      // Calling outcome records the executive's manual interaction without bypassing the
+      // formal recruitment workflow (NEW -> ASSIGNED -> CALLING -> INTERESTED -> SHORTLISTED -> SCREENING -> etc.).
+      // If the lead is NEW or ASSIGNED, move it to CALLING when a call is logged to record that calling started.
+      // Application stage remains unchanged if already in CALLING or subsequent pipeline stages.
       let nextStage = app.currentStage;
-      let formStatus = app.formStatus;
-      let cvStatus = app.cvStatus;
-
-      if (callOutcome === 'SHORTLISTED') {
-        nextStage = 'SHORTLISTED';
-        if (formStatus === 'PENDING') formStatus = 'SENT';
-      } else if (callOutcome === 'INTERESTED') {
-        if (app.currentStage === 'NEW' || app.currentStage === 'ASSIGNED' || app.currentStage === 'CALLING') {
-          nextStage = 'INTERESTED';
-        }
-      } else if (app.currentStage === 'ASSIGNED' || app.currentStage === 'NEW') {
+      if (app.currentStage === 'NEW' || app.currentStage === 'ASSIGNED') {
         nextStage = 'CALLING';
       }
 
-      // Update application stage if changed
-      if (nextStage !== app.currentStage || formStatus !== app.formStatus) {
+      // Update application stage if changed to CALLING
+      if (nextStage !== app.currentStage) {
         await tx.application.update({
           where: { id: applicationId },
           data: {
             currentStage: nextStage,
-            formStatus,
-            formSentAt: formStatus === 'SENT' ? new Date() : app.formSentAt,
           },
         });
       }

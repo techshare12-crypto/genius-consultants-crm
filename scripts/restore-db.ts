@@ -61,25 +61,50 @@ export async function verifyAndRestoreBackup(
 
     const data = backup.data;
 
+    const defaultUser = await prisma.user.findFirst();
+    const defaultCandidate = await prisma.candidate.findFirst();
+    const defaultJob = await prisma.jobRequirement.findFirst();
+    const defaultCompany = await prisma.company.findFirst();
+    const userIdMap = new Map<string, string>();
+    const companyIdMap = new Map<string, string>();
+    const jobIdMap = new Map<string, string>();
+    const candidateIdMap = new Map<string, string>();
+
+    const resolveUserId = (id?: string | null) => {
+      if (!id) return defaultUser?.id || '';
+      return userIdMap.get(id) || id;
+    };
+
     // 1. Restore Users
     if (data.users && Array.isArray(data.users)) {
       for (const u of data.users) {
         const { createdAt, updatedAt, lastActivityAt, lastLoginAt, ...rest } = u;
-        await prisma.user.upsert({
-          where: { id: u.id },
-          update: {
-            ...rest,
-            lastActivityAt: lastActivityAt ? new Date(lastActivityAt) : null,
-            lastLoginAt: lastLoginAt ? new Date(lastLoginAt) : null,
-          },
-          create: {
-            ...rest,
-            lastActivityAt: lastActivityAt ? new Date(lastActivityAt) : null,
-            lastLoginAt: lastLoginAt ? new Date(lastLoginAt) : null,
-            createdAt: new Date(createdAt),
-            updatedAt: new Date(updatedAt),
-          },
-        });
+        const existingByEmail = await prisma.user.findUnique({ where: { email: u.email } });
+        if (existingByEmail) {
+          userIdMap.set(u.id, existingByEmail.id);
+          await prisma.user.update({
+            where: { id: existingByEmail.id },
+            data: {
+              fullName: rest.fullName,
+              phone: rest.phone,
+              passwordHash: rest.passwordHash,
+              status: rest.status,
+              lastActivityAt: lastActivityAt ? new Date(lastActivityAt) : null,
+              lastLoginAt: lastLoginAt ? new Date(lastLoginAt) : null,
+            },
+          });
+        } else {
+          const created = await prisma.user.create({
+            data: {
+              ...rest,
+              lastActivityAt: lastActivityAt ? new Date(lastActivityAt) : null,
+              lastLoginAt: lastLoginAt ? new Date(lastLoginAt) : null,
+              createdAt: new Date(createdAt),
+              updatedAt: new Date(updatedAt),
+            },
+          });
+          userIdMap.set(u.id, created.id);
+        }
         restoredCounts.users++;
       }
     }
@@ -87,28 +112,42 @@ export async function verifyAndRestoreBackup(
     // 2. Restore Companies
     if (data.companies && Array.isArray(data.companies)) {
       for (const c of data.companies) {
-        const { createdAt, updatedAt, ...rest } = c;
-        await prisma.company.upsert({
-          where: { id: c.id },
-          update: rest,
-          create: {
-            ...rest,
-            createdAt: new Date(createdAt),
-            updatedAt: new Date(updatedAt),
-          },
-        });
+        const { createdAt, updatedAt, createdById, ...rest } = c;
+        const validCreatedById = resolveUserId(createdById);
+        const existingByCode = await prisma.company.findUnique({ where: { companyCode: c.companyCode } });
+        if (existingByCode) {
+          companyIdMap.set(c.id, existingByCode.id);
+          await prisma.company.update({
+            where: { id: existingByCode.id },
+            data: { ...rest, createdById: validCreatedById },
+          });
+        } else {
+          const upserted = await prisma.company.upsert({
+            where: { id: c.id },
+            update: { ...rest, createdById: validCreatedById },
+            create: {
+              ...rest,
+              createdById: validCreatedById,
+              createdAt: new Date(createdAt),
+              updatedAt: new Date(updatedAt),
+            },
+          });
+          companyIdMap.set(c.id, upserted.id);
+        }
       }
     }
 
     // 3. Restore Company Contacts
     if (data.companyContacts && Array.isArray(data.companyContacts)) {
       for (const cc of data.companyContacts) {
-        const { createdAt, updatedAt, ...rest } = cc;
+        const { createdAt, updatedAt, companyId, ...rest } = cc;
+        const validCompanyId = companyIdMap.get(companyId) || companyId;
         await prisma.companyContact.upsert({
           where: { id: cc.id },
-          update: rest,
+          update: { ...rest, companyId: validCompanyId },
           create: {
             ...rest,
+            companyId: validCompanyId,
             createdAt: new Date(createdAt),
             updatedAt: new Date(updatedAt),
           },
@@ -119,32 +158,79 @@ export async function verifyAndRestoreBackup(
     // 4. Restore Job Requirements
     if (data.jobRequirements && Array.isArray(data.jobRequirements)) {
       for (const j of data.jobRequirements) {
-        const { createdAt, updatedAt, ...rest } = j;
-        await prisma.jobRequirement.upsert({
-          where: { id: j.id },
-          update: rest,
-          create: {
-            ...rest,
-            createdAt: new Date(createdAt),
-            updatedAt: new Date(updatedAt),
-          },
-        });
+        const { createdAt, updatedAt, createdById, companyId, id, ...rest } = j;
+        const validCreatedById = resolveUserId(createdById);
+        const validCompanyId = companyIdMap.get(companyId) || companyId;
+        const jobData = {
+          ...rest,
+          companyId: validCompanyId,
+          skillsRequired: Array.isArray(rest.skillsRequired) ? JSON.stringify(rest.skillsRequired) : (rest.skillsRequired || '[]'),
+          salaryMin: rest.salaryMin != null ? Number(rest.salaryMin) : null,
+          salaryMax: rest.salaryMax != null ? Number(rest.salaryMax) : null,
+          vacancies: rest.vacancies != null ? Number(rest.vacancies) : 1,
+          experienceMin: rest.experienceMin != null ? Number(rest.experienceMin) : 0,
+          experienceMax: rest.experienceMax != null ? Number(rest.experienceMax) : null,
+          createdById: validCreatedById,
+        };
+        const existingByCode = await prisma.jobRequirement.findUnique({ where: { jobCode: j.jobCode } });
+        if (existingByCode) {
+          jobIdMap.set(j.id, existingByCode.id);
+          await prisma.jobRequirement.update({
+            where: { id: existingByCode.id },
+            data: jobData,
+          });
+        } else {
+          const upserted = await prisma.jobRequirement.upsert({
+            where: { id: j.id },
+            update: jobData,
+            create: {
+              ...jobData,
+              id: j.id,
+              createdAt: new Date(createdAt),
+              updatedAt: new Date(updatedAt),
+            },
+          });
+          jobIdMap.set(j.id, upserted.id);
+        }
       }
     }
 
     // 5. Restore Candidates
     if (data.candidates && Array.isArray(data.candidates)) {
       for (const can of data.candidates) {
-        const { createdAt, updatedAt, ...rest } = can;
-        await prisma.candidate.upsert({
-          where: { id: can.id },
-          update: rest,
-          create: {
-            ...rest,
-            createdAt: new Date(createdAt),
-            updatedAt: new Date(updatedAt),
-          },
-        });
+        const { createdAt, updatedAt, createdById, id, ...rest } = can;
+        const candData = {
+          ...rest,
+          skills: Array.isArray(rest.skills) ? JSON.stringify(rest.skills) : (rest.skills || '[]'),
+          languages: Array.isArray(rest.languages) ? JSON.stringify(rest.languages) : (rest.languages || '[]'),
+          currentSalary: rest.currentSalary != null ? Number(rest.currentSalary) : null,
+          expectedSalary: rest.expectedSalary != null ? Number(rest.expectedSalary) : null,
+          age: rest.age != null ? Number(rest.age) : null,
+          experienceYears: rest.experienceYears != null ? Number(rest.experienceYears) : 0,
+          experienceMonths: rest.experienceMonths != null ? Number(rest.experienceMonths) : 0,
+        };
+        const existingByPhone = can.normalizedPhone
+          ? await prisma.candidate.findUnique({ where: { normalizedPhone: can.normalizedPhone } })
+          : null;
+        if (existingByPhone) {
+          candidateIdMap.set(can.id, existingByPhone.id);
+          await prisma.candidate.update({
+            where: { id: existingByPhone.id },
+            data: candData,
+          });
+        } else {
+          const upserted = await prisma.candidate.upsert({
+            where: { id: can.id },
+            update: candData,
+            create: {
+              ...candData,
+              id: can.id,
+              createdAt: new Date(createdAt),
+              updatedAt: new Date(updatedAt),
+            },
+          });
+          candidateIdMap.set(can.id, upserted.id);
+        }
         restoredCounts.candidates++;
       }
     }
@@ -162,33 +248,67 @@ export async function verifyAndRestoreBackup(
           cvReceivedAt,
           readyForScreeningAt,
           finalShortlistedAt,
+          createdById,
+          assignedExecutiveId,
+          assignedById,
+          finalShortlistedById,
+          candidateId,
+          jobId,
+          companyId,
+          assignedTeamId,
           ...rest
         } = app;
-        await prisma.application.upsert({
-          where: { id: app.id },
-          update: {
-            ...rest,
-            assignedAt: assignedAt ? new Date(assignedAt) : null,
-            formSentAt: formSentAt ? new Date(formSentAt) : null,
-            formReceivedAt: formReceivedAt ? new Date(formReceivedAt) : null,
-            cvRequestedAt: cvRequestedAt ? new Date(cvRequestedAt) : null,
-            cvReceivedAt: cvReceivedAt ? new Date(cvReceivedAt) : null,
-            readyForScreeningAt: readyForScreeningAt ? new Date(readyForScreeningAt) : null,
-            finalShortlistedAt: finalShortlistedAt ? new Date(finalShortlistedAt) : null,
-          },
-          create: {
-            ...rest,
-            assignedAt: assignedAt ? new Date(assignedAt) : null,
-            formSentAt: formSentAt ? new Date(formSentAt) : null,
-            formReceivedAt: formReceivedAt ? new Date(formReceivedAt) : null,
-            cvRequestedAt: cvRequestedAt ? new Date(cvRequestedAt) : null,
-            cvReceivedAt: cvReceivedAt ? new Date(cvReceivedAt) : null,
-            readyForScreeningAt: readyForScreeningAt ? new Date(readyForScreeningAt) : null,
-            finalShortlistedAt: finalShortlistedAt ? new Date(finalShortlistedAt) : null,
-            createdAt: new Date(createdAt),
-            updatedAt: new Date(updatedAt),
-          },
-        });
+
+        const validCandidateId = candidateIdMap.get(candidateId) || candidateId || defaultCandidate?.id;
+        const validJobId = jobIdMap.get(jobId) || jobId || defaultJob?.id;
+        const validCompanyId = companyIdMap.get(companyId) || companyId || defaultCompany?.id;
+
+        if (!validCandidateId || !validJobId || !validCompanyId) {
+          continue;
+        }
+
+        const validCreatedById = resolveUserId(createdById);
+        const validExecutiveId = assignedExecutiveId ? resolveUserId(assignedExecutiveId) : null;
+        const validAssignedById = assignedById ? resolveUserId(assignedById) : null;
+        const validShortlistedById = finalShortlistedById ? resolveUserId(finalShortlistedById) : null;
+
+        const appData = {
+          ...rest,
+          candidateId: validCandidateId,
+          jobId: validJobId,
+          companyId: validCompanyId,
+          assignedTeamId: null, // SQLite safe or verified
+          createdById: validCreatedById,
+          assignedExecutiveId: validExecutiveId,
+          assignedById: validAssignedById,
+          finalShortlistedById: validShortlistedById,
+          assignedAt: assignedAt ? new Date(assignedAt) : null,
+          formSentAt: formSentAt ? new Date(formSentAt) : null,
+          formReceivedAt: formReceivedAt ? new Date(formReceivedAt) : null,
+          cvRequestedAt: cvRequestedAt ? new Date(cvRequestedAt) : null,
+          cvReceivedAt: cvReceivedAt ? new Date(cvReceivedAt) : null,
+          readyForScreeningAt: readyForScreeningAt ? new Date(readyForScreeningAt) : null,
+          finalShortlistedAt: finalShortlistedAt ? new Date(finalShortlistedAt) : null,
+        };
+
+        const existingByCode = await prisma.application.findUnique({ where: { applicationCode: app.applicationCode } });
+        if (existingByCode) {
+          await prisma.application.update({
+            where: { id: existingByCode.id },
+            data: appData,
+          });
+        } else {
+          await prisma.application.upsert({
+            where: { id: app.id },
+            update: appData,
+            create: {
+              ...appData,
+              id: app.id,
+              createdAt: new Date(createdAt),
+              updatedAt: new Date(updatedAt),
+            },
+          });
+        }
         restoredCounts.applications++;
       }
     }

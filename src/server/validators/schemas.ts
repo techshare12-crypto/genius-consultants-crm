@@ -4,15 +4,17 @@ import { z } from 'zod';
 // AUTH & USERS
 // ==========================================
 
+export const PasswordValidationSchema = z.string().min(8, 'Password must be at least 8 characters');
+
 export const LoginSchema = z.object({
   email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(1, 'Password is required'),
 });
 
 export const CreateUserSchema = z.object({
   email: z.string().email('Invalid email address'),
   fullName: z.string().min(2, 'Full name is required'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: PasswordValidationSchema,
   phone: z.string().optional(),
   roles: z.array(z.string()).min(1, 'At least one role must be assigned'),
   teamId: z.string().uuid().optional().nullable(),
@@ -25,7 +27,11 @@ export const UpdateUserSchema = z.object({
   presenceStatus: z.enum(['ONLINE', 'ACTIVE', 'CALLING_ACTIVITY', 'AFTER_CALL_WORK', 'IDLE', 'BREAK', 'OFFLINE']).optional(),
   teamId: z.string().uuid().optional().nullable(),
   roles: z.array(z.string()).optional(),
-  password: z.string().min(6).optional(),
+  password: PasswordValidationSchema.optional(),
+});
+
+export const ResetPasswordSchema = z.object({
+  password: PasswordValidationSchema,
 });
 
 // ==========================================

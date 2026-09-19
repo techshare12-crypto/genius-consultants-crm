@@ -23,12 +23,6 @@ export default function LoginPage() {
     }
   };
 
-  const setTestAccount = (testEmail: string) => {
-    setEmail(testEmail);
-    setPassword('Password@123');
-    setError('');
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900 p-4">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-800 overflow-hidden">
@@ -95,50 +89,6 @@ export default function LoginPage() {
             )}
           </button>
         </form>
-
-        {/* 1-Click Role Fill Buttons for Quick Testing */}
-        <div className="bg-slate-50 p-6 border-t border-slate-100 text-center">
-          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2.5">
-            Quick Test Logins (Development Seed)
-          </p>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <button
-              type="button"
-              onClick={() => setTestAccount('admin@geniusconsultancy.com')}
-              className="p-2 bg-white hover:bg-teal-50 hover:text-teal-700 border border-slate-200 rounded-lg text-left transition-colors"
-            >
-              <div className="font-bold text-slate-900 text-[11px]">Super Admin (Mj)</div>
-              <div className="text-[10px] text-slate-400">Full Access</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setTestAccount('ops@geniusconsultancy.com')}
-              className="p-2 bg-white hover:bg-teal-50 hover:text-teal-700 border border-slate-200 rounded-lg text-left transition-colors"
-            >
-              <div className="font-bold text-slate-900 text-[11px]">Operations Head</div>
-              <div className="text-[10px] text-slate-400">Lead Assign & Quality</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setTestAccount('jyoti@geniusconsultancy.com')}
-              className="p-2 bg-white hover:bg-teal-50 hover:text-teal-700 border border-slate-200 rounded-lg text-left transition-colors"
-            >
-              <div className="font-bold text-slate-900 text-[11px]">Jyoti Khandelwal</div>
-              <div className="text-[10px] text-slate-400">Screening + Executive</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setTestAccount('rahul@geniusconsultancy.com')}
-              className="p-2 bg-white hover:bg-teal-50 hover:text-teal-700 border border-slate-200 rounded-lg text-left transition-colors"
-            >
-              <div className="font-bold text-slate-900 text-[11px]">Rahul Sharma</div>
-              <div className="text-[10px] text-slate-400">Executive Calling</div>
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
