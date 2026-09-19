@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
+  url      = "file:./dev.db"
 }
 
 // 1. IDENTITY & ACCESS CONTROL
@@ -37,6 +37,7 @@ model User {
   callLogs                   CallLog[]
   callbacks                  Callback[]
   screenings                 Screening[]
+  verificationsDone          ApplicationVerification[]      @relation("VerifiedByUser")
   clientSubmissions          ClientSubmission[]
   interviewsUpdated          Interview[]
   qualityReviewsReceived     QualityReview[]                @relation("ExecutiveQualityReviews")
@@ -299,6 +300,7 @@ model Application {
   callLogs             CallLog[]
   callbacks            Callback[]
   screenings           Screening[]
+  verification         ApplicationVerification?
   submissionItems      ClientSubmissionItem[]
   interviews           Interview[]
   qualityReviews       QualityReview[]
@@ -521,4 +523,41 @@ model Notification {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
+}
+
+model ApplicationVerification {
+  id                     String      @id @default(uuid())
+  applicationId          String      @unique
+  verifiedByUserId       String?
+  email                  String?
+  age                    Int?
+  gender                 String?
+  currentLocation        String?
+  appliedLocation        String?
+  education              String?
+  experienceYears        Int?        @default(0)
+  experienceMonths       Int?        @default(0)
+  currentCompany         String?
+  previousCompany        String?
+  currentSalary          Float?
+  expectedSalary         Float?
+  noticePeriod           String?
+  hasTwoWheeler          Boolean?
+  hasDrivingLicense      Boolean?
+  interestedInFieldSales Boolean?
+  interestedInAutomobile Boolean?
+  skills                 String      @default("[]")
+  languages              String      @default("[]")
+  assets                 String      @default("[]")
+  customAnswers          String      @default("{}")
+  qualificationStatus    String?     @default("PENDING")
+  matchSummary           String      @default("[]")
+  remarks                String?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  application            Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  verifiedByUser         User?       @relation("VerifiedByUser", fields: [verifiedByUserId], references: [id])
+
+  @@map("application_verifications")
 }

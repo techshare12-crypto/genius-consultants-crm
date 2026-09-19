@@ -11,6 +11,7 @@ import { InterviewService } from '../src/server/services/InterviewService';
 import { QualityService } from '../src/server/services/QualityService';
 import { ReportService } from '../src/server/services/ReportService';
 import { ImportService } from '../src/server/services/ImportService';
+import { VerificationService } from '../src/server/services/VerificationService';
 import { checkLoginRateLimit, resetLoginRateLimit } from '../src/server/utils/rateLimiter';
 import { verifyAndRestoreBackup } from '../scripts/restore-db';
 import { NextRequest } from 'next/server';
@@ -705,12 +706,13 @@ async function runTestSuite() {
   console.log('\n--- Test Suite 16: Executive Calling Workspace & Stage-Outcome Separation ---');
 
   // 1. Create test candidate and application
+  const callingPhone = '97' + Date.now().toString().slice(-8);
   const callingTestCandidate = await prisma.candidate.create({
     data: {
       candidateCode: `CAND-CALL-${Date.now().toString().slice(-6)}`,
       fullName: 'Calling Candidate Test',
-      rawPhone: '9876501234',
-      normalizedPhone: '9876501234',
+      rawPhone: callingPhone,
+      normalizedPhone: callingPhone,
       currentLocation: 'Bangalore',
       experienceYears: 3,
       experienceMonths: 6,
@@ -784,6 +786,380 @@ async function runTestSuite() {
   // 5. Verify Executive CRM presence updated
   const execUserPresence = await prisma.user.findUnique({ where: { id: rahulExec!.id } });
   assert(execUserPresence?.presenceStatus === 'AFTER_CALL_WORK', 'Executive presence updated to AFTER_CALL_WORK upon call completion');
+
+  // ==========================================
+  // TEST SUITE 17: Candidate Verification & Live Qualification Engine
+  // ==========================================
+  console.log('\n--- Test Suite 17: Candidate Verification & Live Qualification Engine ---');
+
+  // 1. Create a fresh candidate and application
+  const verifPhone = '96' + (Date.now() + 1).toString().slice(-8);
+  const verifCandidate = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAND-VRF-${Date.now().toString().slice(-6)}`,
+      fullName: 'Verification Target Candidate',
+      rawPhone: verifPhone,
+      normalizedPhone: verifPhone,
+      email: 'source.master@email.com',
+      age: 26,
+      currentLocation: 'Mumbai',
+      education: '12th Pass',
+      experienceYears: 1,
+      experienceMonths: 6,
+      currentSalary: 20000,
+      expectedSalary: 25000,
+      hasTwoWheeler: false,
+      hasDrivingLicense: false,
+    },
+  });
+
+  const verifJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-VRF-${Date.now().toString().slice(-6)}`,
+      jobTitle: 'Field Sales Executive - Auto',
+      companyId: company!.id,
+      createdById: superAdminUser!.id,
+      location: 'Mumbai',
+      salaryMin: 22000,
+      salaryMax: 30000,
+      experienceMin: 1,
+      experienceMax: 4,
+      twoWheelerRequired: true,
+      drivingLicenseRequired: true,
+      ageRequirement: '20 - 32 years',
+    },
+  });
+
+  const verifApp = await prisma.application.create({
+    data: {
+      applicationCode: `APP-VRF-${Date.now().toString().slice(-6)}`,
+      candidateId: verifCandidate.id,
+      jobId: verifJob.id,
+      companyId: company!.id,
+      currentStage: 'CALLING',
+      assignedExecutiveId: rahulExec!.id,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  // 2. Save candidate-verified data (Confirmed details during call)
+  const savedVerif = await VerificationService.upsertVerification(
+    verifApp.id,
+    {
+      email: 'candidate.verified@gmail.com',
+      age: 27,
+      gender: 'Male',
+      currentLocation: 'Mumbai Suburban',
+      appliedLocation: 'Mumbai',
+      education: 'Graduate B.Com',
+      experienceYears: 2,
+      experienceMonths: 0,
+      currentCompany: 'Reliance Retail',
+      previousCompany: 'DMart',
+      currentSalary: 22000,
+      expectedSalary: 28000,
+      noticePeriod: 'Immediate',
+      hasTwoWheeler: true,
+      hasDrivingLicense: true,
+      interestedInFieldSales: true,
+      interestedInAutomobile: true,
+      skills: ['Direct Sales', 'Customer Handling'],
+      languages: ['Hindi', 'English', 'Marathi'],
+    },
+    rahulExec!.id
+  );
+
+  assert(savedVerif.id !== undefined, 'ApplicationVerification record created successfully');
+  assert(savedVerif.email === 'candidate.verified@gmail.com', 'Verified email updated on verification record');
+  assert(savedVerif.hasTwoWheeler === true, 'Verified 2-wheeler status saved as true');
+  assert(savedVerif.verifiedByUserId === rahulExec!.id, 'Verified by user ID recorded');
+
+  // 3. Confirm Candidate Master Source Data remains UNTOUCHED
+  const candMaster = await prisma.candidate.findUnique({ where: { id: verifCandidate.id } });
+  assert(candMaster?.email === 'source.master@email.com', 'Source candidate email remains untouched in Candidate master');
+  assert(candMaster?.hasTwoWheeler === false, 'Source candidate 2-wheeler remains false in Candidate master');
+  assert(candMaster?.education === '12th Pass', 'Source education remains untouched');
+
+  // 4. Confirm Application recruitment stage is NOT mutated by verification saving
+  const appAfterVerif = await prisma.application.findUnique({ where: { id: verifApp.id } });
+  assert(appAfterVerif?.currentStage === 'CALLING', 'Application recruitment stage strictly preserved during verification save');
+
+  // 5. Test Live Qualification Engine Evaluation
+  const { qualificationEvaluation: evalResult } = await VerificationService.getVerification(verifApp.id);
+  assert(evalResult.overallStatus === 'MATCH', 'Qualification Engine evaluates full criteria as QUALIFIED MATCH');
+  assert(evalResult.rules.length >= 8, 'Engine evaluates all 8 distinct rule criteria');
+
+  const bikeRule = evalResult.rules.find((r) => r.key === 'twoWheeler');
+  assert(bikeRule?.status === 'MATCH', 'Two-Wheeler rule evaluated as MATCH');
+
+  // ============================================================
+  // BUSINESS RULE TEST 1: Source Age 25, Verified Age 27, Job Age 21-30 => MATCH
+  // The system MUST NOT treat difference (25 -> 27) as a mismatch.
+  // ============================================================
+  const evalRule1 = VerificationService.evaluateQualification(
+    { age: 27 },
+    { ageRequirement: '21 - 30 years' }
+  );
+  const ageRule1 = evalRule1.rules.find((r) => r.key === 'age');
+  assert(
+    ageRule1?.status === 'MATCH',
+    'Business Rule 1: Source 25 -> Verified 27 vs Job (21-30) evaluates to MATCH (difference is not mismatch)'
+  );
+
+  // ============================================================
+  // BUSINESS RULE 2: Source Salary 18k, Verified Salary 22k, Job Max 20k => MISMATCH
+  // Mismatch is strictly because verified 22k > 20k (not because 18k != 22k).
+  // ============================================================
+  const evalRule2 = VerificationService.evaluateQualification(
+    { expectedSalary: 22000 },
+    { salaryMax: 20000 }
+  );
+  const salaryRule2 = evalRule2.rules.find((r) => r.key === 'salary');
+  assert(
+    salaryRule2?.status === 'MISMATCH',
+    'Business Rule 2: Verified Salary 22k vs Job Max 20k evaluates to MISMATCH (because 22k > 20k)'
+  );
+
+  // ============================================================
+  // BUSINESS RULE 3: Source Age 25, Verified Age 27, Job Age 21-25 => MISMATCH
+  // Mismatch is strictly because verified 27 > 25 (not because 25 != 27).
+  // ============================================================
+  const evalRule3 = VerificationService.evaluateQualification(
+    { age: 27 },
+    { ageRequirement: '21 - 25 years' }
+  );
+  const ageRule3 = evalRule3.rules.find((r) => r.key === 'age');
+  assert(
+    ageRule3?.status === 'MISMATCH',
+    'Business Rule 3: Verified Age 27 vs Job (21-25) evaluates to MISMATCH (because 27 > 25)'
+  );
+
+  // ============================================================
+  // BUSINESS RULE 4: Missing Verified Value => REVIEW (Not assumed from source)
+  // When verified age is missing, do not assume source age. Must be REVIEW.
+  // ============================================================
+  const evalRule4 = VerificationService.evaluateQualification(
+    { age: null },
+    { ageRequirement: '21 - 30 years' }
+  );
+  const ageRule4 = evalRule4.rules.find((r) => r.key === 'age');
+  assert(
+    ageRule4?.status === 'REVIEW' && ageRule4?.candidateValue === 'Not Verified',
+    'Business Rule 4: Missing verified age returns REVIEW with candidateValue = "Not Verified"'
+  );
+
+  // ============================================================
+  // BUSINESS RULE 5: Application-Level Isolation
+  // Same Candidate, 2 Applications => 2 independent ApplicationVerification records
+  // Candidate Master remains untouched.
+  // ============================================================
+  const secondJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-SEC-${Date.now().toString().slice(-6)}`,
+      jobTitle: 'Store Manager',
+      companyId: company!.id,
+      createdById: superAdminUser!.id,
+      location: 'Pune',
+      salaryMin: 30000,
+      salaryMax: 40000,
+      experienceMin: 2,
+    },
+  });
+
+  const secondApp = await prisma.application.create({
+    data: {
+      applicationCode: `APP-SEC-${Date.now().toString().slice(-6)}`,
+      candidateId: verifCandidate.id,
+      jobId: secondJob.id,
+      companyId: company!.id,
+      currentStage: 'CALLING',
+      assignedExecutiveId: rahulExec!.id,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  // Verify App 2 independently
+  const savedVerifApp2 = await VerificationService.upsertVerification(
+    secondApp.id,
+    {
+      age: 28,
+      expectedSalary: 35000,
+      hasTwoWheeler: false,
+    },
+    rahulExec!.id
+  );
+
+  assert(savedVerifApp2.id !== savedVerif.id, 'Business Rule 5: App 1 and App 2 have distinct independent verification IDs');
+  assert(savedVerifApp2.age === 28 && savedVerif.age === 27, 'Business Rule 5: App 1 verified age (27) and App 2 verified age (28) are isolated');
+
+  const reloadedCandMaster = await prisma.candidate.findUnique({ where: { id: verifCandidate.id } });
+  assert(
+    reloadedCandMaster?.age === 26 && reloadedCandMaster?.email === 'source.master@email.com',
+    'Business Rule 5: Candidate master record remains untouched (Age=26, Email=source.master@email.com)'
+  );
+
+  // 6. Test Mismatch Scenario (Missing License / Bike)
+  const mismatchVerif = await VerificationService.upsertVerification(
+    verifApp.id,
+    {
+      hasTwoWheeler: false,
+      hasDrivingLicense: false,
+    },
+    rahulExec!.id
+  );
+  assert(mismatchVerif.hasTwoWheeler === false, 'Updated verification with missing two-wheeler');
+
+  const { qualificationEvaluation: evalMismatch } = await VerificationService.getVerification(verifApp.id);
+  assert(evalMismatch.overallStatus === 'MISMATCH', 'Engine flags overall MISMATCH when mandatory 2-wheeler is missing');
+
+  // 7. Verify Audit Log recorded for verification
+  const verifAudit = await prisma.auditLog.findFirst({
+    where: {
+      entity: 'ApplicationVerification',
+      action: 'VERIFICATION_SAVED',
+      userId: rahulExec!.id,
+    },
+  });
+  assert(verifAudit !== null, 'AuditLog created for VERIFICATION_SAVED action');
+
+  // ==========================================
+  // TEST SUITE 18: Executive Productivity & Activity Analytics
+  // ==========================================
+  console.log('\n--- Test Suite 18: Executive Productivity & Activity Analytics ---');
+
+  // 1. Setup multiple call interactions across distinct applications for Rahul
+  const prodPhone = '95' + (Date.now() + 2).toString().slice(-8);
+  const prodCandidate2 = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAND-PRD2-${Date.now().toString().slice(-6)}`,
+      fullName: 'Productivity Candidate Two',
+      rawPhone: prodPhone,
+      normalizedPhone: prodPhone,
+      currentLocation: 'Delhi',
+    },
+  });
+
+  const prodApp2 = await prisma.application.create({
+    data: {
+      applicationCode: `APP-PRD2-${Date.now().toString().slice(-6)}`,
+      candidateId: prodCandidate2.id,
+      jobId: verifJob.id,
+      companyId: company!.id,
+      currentStage: 'CALLING',
+      assignedExecutiveId: rahulExec!.id,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  // Rahul logs 2 calls to App 1, and 1 call to App 2
+  await CallingService.logCall({
+    applicationId: verifApp.id,
+    candidateId: verifCandidate.id,
+    executiveId: rahulExec!.id,
+    callOutcome: 'CONNECTED',
+    remarks: 'First interaction discussion',
+  });
+
+  await CallingService.logCall({
+    applicationId: verifApp.id,
+    candidateId: verifCandidate.id,
+    executiveId: rahulExec!.id,
+    callOutcome: 'INTERESTED',
+    remarks: 'Second interaction candidate agreed',
+  });
+
+  await CallingService.logCall({
+    applicationId: prodApp2.id,
+    candidateId: prodCandidate2.id,
+    executiveId: rahulExec!.id,
+    callOutcome: 'RNR',
+    remarks: 'No response from candidate',
+  });
+
+  // 2. Fetch Productivity Analytics for Rahul
+  const superAdminSession = {
+    userId: superAdminUser!.id,
+    email: superAdminUser!.email,
+    fullName: superAdminUser!.fullName,
+    roles: ['SUPER_ADMIN'],
+    permissions: ['reports.operations', 'application.view_all'],
+  };
+
+  const rahulSession = {
+    userId: rahulExec!.id,
+    email: rahulExec!.email,
+    fullName: rahulExec!.fullName,
+    roles: ['EXECUTIVE'],
+    permissions: ['application.view_own', 'calling.log'],
+  };
+
+  const prodAnalytics = await ReportService.getExecutiveProductivityAnalytics(
+    {
+      datePreset: 'TODAY',
+      executiveId: rahulExec!.id,
+    },
+    superAdminSession
+  );
+
+  assert(prodAnalytics.summary.totalCallsLogged >= 3, 'Total Calls Logged aggregated correctly');
+  assert(prodAnalytics.summary.uniqueLeadsWorked >= 2, 'Unique Leads Worked computed distinctly across applications');
+  assert(prodAnalytics.summary.connectedCalls >= 1, 'Connected calls count verified');
+
+  const rahulRow = prodAnalytics.executiveMatrix.find((e: any) => e.id === rahulExec!.id);
+  assert(rahulRow !== undefined, 'Executive matrix contains Rahul');
+  assert((rahulRow?.uniqueLeadsWorked ?? 0) >= 2, 'Executive matrix records Unique Leads Worked >= 2');
+  assert((rahulRow?.totalCallsLogged ?? 0) >= 3, 'Executive matrix records Total Calls Logged >= 3');
+
+  // 3. Test Hourly Productivity Breakdown
+  assert(Array.isArray(prodAnalytics.hourlyBreakdown), 'Hourly breakdown array returned');
+  assert(prodAnalytics.hourlyBreakdown.length > 0, 'Hourly breakdown contains working day hour slots');
+
+  // 4. Test Executive Activity Timeline & CRM Activity Gap Calculation
+  const timelineResult = await ReportService.getExecutiveActivityTimeline(
+    { executiveId: rahulExec!.id },
+    superAdminSession
+  );
+
+  assert(timelineResult.executive.fullName === rahulExec!.fullName, 'Timeline loads for target executive');
+  assert(timelineResult.totalEvents >= 3, 'Timeline aggregates all discrete CRM events');
+  assert(Array.isArray(timelineResult.events), 'Timeline events array returned');
+
+  // 5. Test Server-side RBAC Enforcement
+  let rbacBlocked = false;
+  try {
+    // Rahul (Executive) trying to view Priya's productivity analytics
+    await ReportService.getExecutiveProductivityAnalytics(
+      { executiveId: priyaExec!.id },
+      rahulSession
+    );
+  } catch (err: any) {
+    if (err.message.includes('Forbidden')) {
+      rbacBlocked = true;
+    }
+  }
+  assert(rbacBlocked, 'Server-side RBAC strictly blocks executive from accessing another executive productivity');
+
+  // 6. Test CSV Export Generation
+  const csvExport = await ReportService.exportProductivityCSV(
+    { datePreset: 'TODAY' },
+    superAdminSession
+  );
+  assert(typeof csvExport === 'string' && csvExport.includes('Executive Name,Email'), 'CSV export generated with headers');
+  assert(csvExport.includes(rahulExec!.fullName), 'CSV export includes executive records');
+
+  // 7. Test CSV Export RBAC
+  let csvRbacBlocked = false;
+  try {
+    await ReportService.exportProductivityCSV(
+      { executiveId: priyaExec!.id },
+      rahulSession
+    );
+  } catch (err: any) {
+    if (err.message.includes('Forbidden')) {
+      csvRbacBlocked = true;
+    }
+  }
+  assert(csvRbacBlocked, 'Server-side RBAC strictly blocks executive from exporting another executive CSV data');
 
   // ==========================================
   // TEST SUMMARY

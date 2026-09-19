@@ -58,8 +58,13 @@ export async function GET(req: NextRequest) {
       take: limit,
       include: {
         candidate: true,
-        job: { select: { id: true, jobTitle: true, vacancies: true, location: true, company: { select: { id: true, companyName: true } } } },
+        job: {
+          include: {
+            company: { select: { id: true, companyName: true } },
+          },
+        },
         company: { select: { id: true, companyName: true } },
+        verification: true,
         assignedExecutive: { select: { id: true, fullName: true, email: true } },
         assignedBy: { select: { id: true, fullName: true } },
         _count: {

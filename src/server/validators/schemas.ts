@@ -148,6 +148,36 @@ export const CompleteCallbackSchema = z.object({
 });
 
 // ==========================================
+// CANDIDATE VERIFICATION & QUALIFICATION
+// ==========================================
+
+export const SaveVerificationSchema = z.object({
+  applicationId: z.string().uuid('Invalid application ID'),
+  email: z.string().email('Invalid email').optional().nullable().or(z.literal('')),
+  age: z.number().int().min(16).max(75).optional().nullable(),
+  gender: z.string().optional().nullable(),
+  currentLocation: z.string().optional().nullable(),
+  appliedLocation: z.string().optional().nullable(),
+  education: z.string().optional().nullable(),
+  experienceYears: z.number().int().min(0).optional().nullable(),
+  experienceMonths: z.number().int().min(0).max(11).optional().nullable(),
+  currentCompany: z.string().optional().nullable(),
+  previousCompany: z.string().optional().nullable(),
+  currentSalary: z.number().optional().nullable(),
+  expectedSalary: z.number().optional().nullable(),
+  noticePeriod: z.string().optional().nullable(),
+  hasTwoWheeler: z.boolean().optional().nullable(),
+  hasDrivingLicense: z.boolean().optional().nullable(),
+  interestedInFieldSales: z.boolean().optional().nullable(),
+  interestedInAutomobile: z.boolean().optional().nullable(),
+  skills: z.array(z.string()).optional().default([]),
+  languages: z.array(z.string()).optional().default([]),
+  assets: z.array(z.string()).optional().default([]),
+  customAnswers: z.record(z.any()).optional().default({}),
+  remarks: z.string().optional().nullable(),
+});
+
+// ==========================================
 // SCREENING & FINAL SHORTLIST
 // ==========================================
 

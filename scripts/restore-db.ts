@@ -142,16 +142,19 @@ export async function verifyAndRestoreBackup(
       for (const cc of data.companyContacts) {
         const { createdAt, updatedAt, companyId, ...rest } = cc;
         const validCompanyId = companyIdMap.get(companyId) || companyId;
-        await prisma.companyContact.upsert({
-          where: { id: cc.id },
-          update: { ...rest, companyId: validCompanyId },
-          create: {
-            ...rest,
-            companyId: validCompanyId,
-            createdAt: new Date(createdAt),
-            updatedAt: new Date(updatedAt),
-          },
-        });
+        const validCompany = await prisma.company.findUnique({ where: { id: validCompanyId } });
+        if (validCompany) {
+          await prisma.companyContact.upsert({
+            where: { id: cc.id },
+            update: { ...rest, companyId: validCompany.id },
+            create: {
+              ...rest,
+              companyId: validCompany.id,
+              createdAt: new Date(createdAt),
+              updatedAt: new Date(updatedAt),
+            },
+          });
+        }
       }
     }
 

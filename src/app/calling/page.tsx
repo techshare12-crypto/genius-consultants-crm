@@ -29,8 +29,41 @@ import {
   ChevronLeft,
   CalendarClock,
   ExternalLink,
-  ShieldAlert
+  ShieldAlert,
+  Save,
+  CheckCircle,
+  XCircle,
+  HelpCircle,
+  Briefcase,
+  MapPin,
+  IndianRupee,
+  GraduationCap,
+  Car,
 } from 'lucide-react';
+
+interface VerificationData {
+  id?: string;
+  applicationId?: string;
+  email?: string;
+  age?: number | null;
+  gender?: string;
+  currentLocation?: string;
+  appliedLocation?: string;
+  education?: string;
+  experienceYears?: number | null;
+  experienceMonths?: number | null;
+  currentCompany?: string;
+  previousCompany?: string;
+  currentSalary?: number | null;
+  expectedSalary?: number | null;
+  noticePeriod?: string;
+  hasTwoWheeler?: boolean | null;
+  hasDrivingLicense?: boolean | null;
+  interestedInFieldSales?: boolean | null;
+  interestedInAutomobile?: boolean | null;
+  skills?: string[];
+  languages?: string[];
+}
 
 interface ApplicationItem {
   id: string;
@@ -44,18 +77,23 @@ interface ApplicationItem {
   updatedAt: string;
   candidate: {
     id: string;
+    candidateCode?: string;
     fullName: string;
     phone: string;
     normalizedPhone: string;
     alternatePhone?: string | null;
     email?: string | null;
+    gender?: string | null;
+    age?: number | null;
     currentLocation?: string | null;
     currentCompany?: string | null;
     currentJob?: string | null;
+    highestEducation?: string | null;
     experienceYears?: number;
     experienceMonths?: number;
     currentSalary?: number | null;
     expectedSalary?: number | null;
+    noticePeriod?: string | null;
     hasTwoWheeler?: boolean;
     hasDrivingLicense?: boolean;
     skills?: string[];
@@ -65,6 +103,16 @@ interface ApplicationItem {
     jobTitle: string;
     location?: string;
     vacancies?: number;
+    salaryMin?: number | null;
+    salaryMax?: number | null;
+    experienceMin?: number;
+    experienceMax?: number | null;
+    twoWheelerRequired?: boolean;
+    drivingLicenseRequired?: boolean;
+    educationRequirement?: string | null;
+    genderRequirement?: string | null;
+    ageRequirement?: string | null;
+    jobDescription?: string | null;
     company: {
       id: string;
       companyName: string;
@@ -74,6 +122,7 @@ interface ApplicationItem {
     id: string;
     companyName: string;
   };
+  verification?: VerificationData | null;
   assignedExecutive?: {
     id: string;
     fullName: string;
@@ -124,6 +173,9 @@ export default function ExecutiveCallingWorkspacePage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Active Tab inside Candidate View
+  const [activeRightTab, setActiveRightTab] = useState<'CALL_LOG' | 'VERIFICATION' | 'HISTORY'>('VERIFICATION');
+
   // Clipboard feedbacks
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [copiedMsg, setCopiedMsg] = useState(false);
@@ -139,7 +191,30 @@ export default function ExecutiveCallingWorkspacePage() {
   // Call Logging Form State
   const [remarks, setRemarks] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [selectedOutcome, setSelectedOutcome] = useState<string | null>(null);
+  const [savingVerification, setSavingVerification] = useState(false);
+
+  // Candidate Verification Form State
+  const [verifForm, setVerifForm] = useState<VerificationData>({
+    email: '',
+    age: null,
+    gender: 'Male',
+    currentLocation: '',
+    appliedLocation: '',
+    education: '',
+    experienceYears: null,
+    experienceMonths: null,
+    currentCompany: '',
+    previousCompany: '',
+    currentSalary: null,
+    expectedSalary: null,
+    noticePeriod: 'Immediate',
+    hasTwoWheeler: null,
+    hasDrivingLicense: null,
+    interestedInFieldSales: null,
+    interestedInAutomobile: null,
+    skills: [],
+    languages: ['Hindi', 'English'],
+  });
 
   // Callback Scheduling Modal & Inputs
   const [showCallbackModal, setShowCallbackModal] = useState(false);
@@ -164,8 +239,8 @@ export default function ExecutiveCallingWorkspacePage() {
   useEffect(() => {
     if (selectedApp) {
       fetchCallHistory(selectedApp.id, selectedApp.candidateId);
+      fetchVerification(selectedApp.id, selectedApp);
       setRemarks('');
-      setSelectedOutcome(null);
     }
   }, [selectedApp?.id]);
 
@@ -193,9 +268,8 @@ export default function ExecutiveCallingWorkspacePage() {
       }
 
       if (appsData.length > 0) {
-        // Set first candidate in prioritized order
         const prioritized = prioritizeList(appsData, cbData);
-        if (prioritized.length > 0) {
+        if (prioritized.length > 0 && !selectedApp) {
           setSelectedApp(prioritized[0].app);
         }
       }
@@ -223,6 +297,92 @@ export default function ExecutiveCallingWorkspacePage() {
     }
   };
 
+  const fetchVerification = async (applicationId: string, app: ApplicationItem) => {
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/verification`);
+      if (res.ok) {
+        const d = await res.json();
+        if (d.data?.verification) {
+          const v = d.data.verification;
+          setVerifForm({
+            email: v.email ?? '',
+            age: v.age ?? null,
+            gender: v.gender ?? 'Male',
+            currentLocation: v.currentLocation ?? '',
+            appliedLocation: v.appliedLocation ?? '',
+            education: v.education ?? '',
+            experienceYears: v.experienceYears ?? null,
+            experienceMonths: v.experienceMonths ?? null,
+            currentCompany: v.currentCompany ?? '',
+            previousCompany: v.previousCompany ?? '',
+            currentSalary: v.currentSalary ? Number(v.currentSalary) : null,
+            expectedSalary: v.expectedSalary ? Number(v.expectedSalary) : null,
+            noticePeriod: v.noticePeriod ?? 'Immediate',
+            hasTwoWheeler: v.hasTwoWheeler ?? null,
+            hasDrivingLicense: v.hasDrivingLicense ?? null,
+            interestedInFieldSales: v.interestedInFieldSales ?? null,
+            interestedInAutomobile: v.interestedInAutomobile ?? null,
+            skills: Array.isArray(v.skills) ? v.skills : [],
+            languages: Array.isArray(v.languages) && v.languages.length > 0 ? v.languages : ['Hindi', 'English'],
+          });
+          return;
+        }
+      }
+
+      // Initial unverified state (authoritative verification is empty until entered or pre-filled)
+      setVerifForm({
+        email: '',
+        age: null,
+        gender: 'Male',
+        currentLocation: '',
+        appliedLocation: '',
+        education: '',
+        experienceYears: null,
+        experienceMonths: null,
+        currentCompany: '',
+        previousCompany: '',
+        currentSalary: null,
+        expectedSalary: null,
+        noticePeriod: 'Immediate',
+        hasTwoWheeler: null,
+        hasDrivingLicense: null,
+        interestedInFieldSales: null,
+        interestedInAutomobile: null,
+        skills: [],
+        languages: ['Hindi', 'English'],
+      });
+    } catch (err) {
+      console.error('Error fetching verification:', err);
+    }
+  };
+
+  const prefillFromSource = () => {
+    if (!selectedApp) return;
+    const c = selectedApp.candidate;
+    setVerifForm({
+      email: c.email ?? '',
+      age: c.age ?? null,
+      gender: c.gender ?? 'Male',
+      currentLocation: c.currentLocation ?? '',
+      appliedLocation: selectedApp.job.location ?? '',
+      education: c.highestEducation ?? '',
+      experienceYears: c.experienceYears ?? 0,
+      experienceMonths: c.experienceMonths ?? 0,
+      currentCompany: c.currentCompany ?? '',
+      previousCompany: '',
+      currentSalary: c.currentSalary ?? null,
+      expectedSalary: c.expectedSalary ?? null,
+      noticePeriod: c.noticePeriod ?? 'Immediate',
+      hasTwoWheeler: c.hasTwoWheeler ?? false,
+      hasDrivingLicense: c.hasDrivingLicense ?? false,
+      interestedInFieldSales: false,
+      interestedInAutomobile: false,
+      skills: c.skills ?? [],
+      languages: ['Hindi', 'English'],
+    });
+    showToast('Pre-filled verification form from source master reference.');
+  };
+
   const handleRefresh = () => {
     setRefreshing(true);
     fetchInitialData();
@@ -239,7 +399,7 @@ export default function ExecutiveCallingWorkspacePage() {
 
     return apps.map((app) => {
       const cb = cbMap.get(app.id);
-      let rank = 4; // Default: Remaining Leads
+      let rank = 4;
       let tag = 'Active Queue';
       let tagVariant: 'purple' | 'warning' | 'danger' | 'info' | 'neutral' = 'neutral';
 
@@ -271,11 +431,10 @@ export default function ExecutiveCallingWorkspacePage() {
     });
   };
 
-  // Filtered & Prioritized Queue
   const prioritizedQueue = useMemo(() => {
     const prioritized = prioritizeList(applications, callbacks);
 
-    return prioritized.filter(({ app, callback, rank }) => {
+    return prioritized.filter(({ app, callback }) => {
       const query = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !query ||
@@ -306,7 +465,6 @@ export default function ExecutiveCallingWorkspacePage() {
     });
   }, [applications, callbacks, searchQuery, activeTab, jobFilter, companyFilter]);
 
-  // Unique Job and Company options for dropdown filters
   const uniqueJobs = useMemo(() => {
     const map = new Map<string, string>();
     applications.forEach((a) => map.set(a.jobId, a.job.jobTitle));
@@ -319,7 +477,6 @@ export default function ExecutiveCallingWorkspacePage() {
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [applications]);
 
-  // Top Summary Metrics
   const metrics = useMemo(() => {
     const total = applications.length;
     const callbacksDue = callbacks.length;
@@ -330,6 +487,358 @@ export default function ExecutiveCallingWorkspacePage() {
 
     return { total, callbacksDue, followupsDue, workedToday, connectedCount, shortlistedCount };
   }, [applications, callbacks]);
+
+  // Real-time Qualification Matching Engine (Rule-based vs Job Requirement)
+  const qualificationResults = useMemo(() => {
+    if (!selectedApp) return null;
+
+    const job = selectedApp.job;
+    const rules: {
+      rule: string;
+      status: 'MATCH' | 'MISMATCH' | 'REVIEW';
+      reason: string;
+      verifiedValue: string;
+      requirement: string;
+    }[] = [];
+
+    // 1. Age Rule
+    if (job.ageRequirement) {
+      const numbers = job.ageRequirement.match(/\d+/g)?.map(Number) || [];
+      if (verifForm.age != null) {
+        if (numbers.length >= 2) {
+          const [min, max] = numbers;
+          const status = verifForm.age >= min && verifForm.age <= max ? 'MATCH' : 'MISMATCH';
+          rules.push({
+            rule: 'Age Criteria',
+            requirement: job.ageRequirement,
+            verifiedValue: `${verifForm.age} Yrs`,
+            status,
+            reason: status === 'MATCH' ? `Verified age ${verifForm.age} fits requirement (${min}-${max} yrs)` : `Verified age ${verifForm.age} outside criteria (${min}-${max} yrs)`,
+          });
+        } else if (numbers.length === 1) {
+          const isMax = job.ageRequirement.toLowerCase().includes('max') || job.ageRequirement.toLowerCase().includes('under');
+          const status = isMax ? (verifForm.age <= numbers[0] ? 'MATCH' : 'MISMATCH') : (verifForm.age >= numbers[0] ? 'MATCH' : 'MISMATCH');
+          rules.push({
+            rule: 'Age Criteria',
+            requirement: job.ageRequirement,
+            verifiedValue: `${verifForm.age} Yrs`,
+            status,
+            reason: `Verified age evaluated vs threshold (${numbers[0]})`,
+          });
+        } else {
+          rules.push({
+            rule: 'Age Criteria',
+            requirement: job.ageRequirement,
+            verifiedValue: `${verifForm.age} Yrs`,
+            status: 'REVIEW',
+            reason: 'Age format requires manual review',
+          });
+        }
+      } else {
+        rules.push({
+          rule: 'Age Criteria',
+          requirement: job.ageRequirement,
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Candidate age has not been confirmed on call',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Age Criteria',
+        requirement: 'Open / Any Age',
+        verifiedValue: verifForm.age != null ? `${verifForm.age} Yrs` : 'Not required',
+        status: 'MATCH',
+        reason: 'No age constraints for this position',
+      });
+    }
+
+    // 2. Experience Rule
+    const expMin = job.experienceMin ?? 0;
+    const expMax = job.experienceMax;
+    let expReqStr = `Min ${expMin} yr`;
+    if (expMax) expReqStr += ` - Max ${expMax} yrs`;
+
+    if (verifForm.experienceYears != null || verifForm.experienceMonths != null) {
+      const candExpYears = (verifForm.experienceYears ?? 0) + ((verifForm.experienceMonths ?? 0) / 12);
+      const candExpDisplay = `${verifForm.experienceYears ?? 0}y ${verifForm.experienceMonths ?? 0}m`;
+
+      let expStatus: 'MATCH' | 'MISMATCH' | 'REVIEW' = 'MATCH';
+      let expNotes = 'Verified experience satisfies job requirement';
+
+      if (candExpYears < expMin) {
+        expStatus = 'MISMATCH';
+        expNotes = `${candExpDisplay} is below required minimum (${expMin} yrs)`;
+      } else if (expMax && candExpYears > expMax) {
+        expStatus = 'REVIEW';
+        expNotes = `${candExpDisplay} exceeds maximum target (${expMax} yrs) - overqualification review`;
+      }
+
+      rules.push({
+        rule: 'Experience Level',
+        requirement: expReqStr,
+        verifiedValue: candExpDisplay,
+        status: expStatus,
+        reason: expNotes,
+      });
+    } else if (expMin > 0) {
+      rules.push({
+        rule: 'Experience Level',
+        requirement: expReqStr,
+        verifiedValue: 'Not Verified',
+        status: 'REVIEW',
+        reason: 'Experience not yet confirmed with candidate',
+      });
+    } else {
+      rules.push({
+        rule: 'Experience Level',
+        requirement: expReqStr,
+        verifiedValue: 'Fresher / Open',
+        status: 'MATCH',
+        reason: 'Fresher / open experience accepted',
+      });
+    }
+
+    // 3. Expected Salary Rule
+    const maxSal = job.salaryMax != null ? Number(job.salaryMax) : null;
+    const expSal = verifForm.expectedSalary != null ? Number(verifForm.expectedSalary) : null;
+
+    if (maxSal != null) {
+      if (expSal != null) {
+        let salStatus: 'MATCH' | 'MISMATCH' | 'REVIEW' = 'MATCH';
+        let salNotes = `Expected ₹${expSal.toLocaleString()} is within budget (max ₹${maxSal.toLocaleString()})`;
+
+        if (expSal > maxSal) {
+          salStatus = 'MISMATCH';
+          salNotes = `Expected ₹${expSal.toLocaleString()} exceeds job max budget ₹${maxSal.toLocaleString()}`;
+        }
+
+        rules.push({
+          rule: 'Salary Alignment',
+          requirement: `Budget up to ₹${maxSal.toLocaleString()}`,
+          verifiedValue: `₹${expSal.toLocaleString()}`,
+          status: salStatus,
+          reason: salNotes,
+        });
+      } else {
+        rules.push({
+          rule: 'Salary Alignment',
+          requirement: `Budget up to ₹${maxSal.toLocaleString()}`,
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Expected salary not yet confirmed with candidate',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Salary Alignment',
+        requirement: 'Negotiable / Open',
+        verifiedValue: expSal != null ? `₹${expSal.toLocaleString()}` : 'Open',
+        status: 'MATCH',
+        reason: 'Salary open / negotiable',
+      });
+    }
+
+    // 4. Location Match Rule
+    const jobLoc = (job.location || '').trim().toLowerCase();
+    const candLoc = (verifForm.currentLocation || '').trim().toLowerCase();
+    const applLoc = (verifForm.appliedLocation || '').trim().toLowerCase();
+
+    if (jobLoc) {
+      if (candLoc || applLoc) {
+        if (candLoc.includes(jobLoc) || jobLoc.includes(candLoc) || applLoc.includes(jobLoc)) {
+          rules.push({
+            rule: 'Location Match',
+            requirement: job.location || 'Any',
+            verifiedValue: verifForm.currentLocation || verifForm.appliedLocation || 'Confirmed',
+            status: 'MATCH',
+            reason: `Candidate location matches opening (${job.location})`,
+          });
+        } else {
+          rules.push({
+            rule: 'Location Match',
+            requirement: job.location || 'Any',
+            verifiedValue: verifForm.currentLocation || verifForm.appliedLocation || 'Different',
+            status: 'REVIEW',
+            reason: `Candidate in ${verifForm.currentLocation}, job in ${job.location}. Verify relocation willingness.`,
+          });
+        }
+      } else {
+        rules.push({
+          rule: 'Location Match',
+          requirement: job.location || 'Any',
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Candidate location preference has not been confirmed on call',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Location Match',
+        requirement: 'Open / Flexible',
+        verifiedValue: verifForm.currentLocation || 'Open',
+        status: 'MATCH',
+        reason: 'Flexible location criteria',
+      });
+    }
+
+    // 5. Two-Wheeler Requirement
+    if (job.twoWheelerRequired) {
+      if (verifForm.hasTwoWheeler === true) {
+        rules.push({
+          rule: 'Two-Wheeler Requirement',
+          requirement: 'Mandatory',
+          verifiedValue: 'Yes (Confirmed Owns Bike)',
+          status: 'MATCH',
+          reason: 'Candidate owns/has 2-wheeler as required',
+        });
+      } else if (verifForm.hasTwoWheeler === false) {
+        rules.push({
+          rule: 'Two-Wheeler Requirement',
+          requirement: 'Mandatory',
+          verifiedValue: 'No (Confirmed No Bike)',
+          status: 'MISMATCH',
+          reason: 'Mandatory 2-wheeler missing for field/delivery role',
+        });
+      } else {
+        rules.push({
+          rule: 'Two-Wheeler Requirement',
+          requirement: 'Mandatory',
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Two-wheeler ownership has not been confirmed with candidate',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Two-Wheeler Requirement',
+        requirement: 'Not required',
+        verifiedValue: verifForm.hasTwoWheeler ? 'Has Bike (Bonus)' : 'Not required',
+        status: 'MATCH',
+        reason: 'Two-wheeler not mandatory',
+      });
+    }
+
+    // 6. Driving License Requirement
+    if (job.drivingLicenseRequired) {
+      if (verifForm.hasDrivingLicense === true) {
+        rules.push({
+          rule: 'Driving License',
+          requirement: 'Mandatory',
+          verifiedValue: 'Yes (Valid DL Confirmed)',
+          status: 'MATCH',
+          reason: 'Candidate holds valid Driving License as required',
+        });
+      } else if (verifForm.hasDrivingLicense === false) {
+        rules.push({
+          rule: 'Driving License',
+          requirement: 'Mandatory',
+          verifiedValue: 'No (Confirmed No License)',
+          status: 'MISMATCH',
+          reason: 'Mandatory Driving License missing for this position',
+        });
+      } else {
+        rules.push({
+          rule: 'Driving License',
+          requirement: 'Mandatory',
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Driving license validity has not been confirmed with candidate',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Driving License',
+        requirement: 'Not required',
+        verifiedValue: verifForm.hasDrivingLicense ? 'Has License (Bonus)' : 'Not required',
+        status: 'MATCH',
+        reason: 'Driving license not mandatory',
+      });
+    }
+
+    // 7. Field Sales Interest
+    const isFieldRole = (job.jobTitle || '').toLowerCase().includes('field') || (job.jobTitle || '').toLowerCase().includes('sales') || (job.jobDescription?.toLowerCase().includes('field visit') ?? false);
+    if (isFieldRole) {
+      if (verifForm.interestedInFieldSales === true) {
+        rules.push({
+          rule: 'Field Sales Willingness',
+          requirement: 'Required for Field Position',
+          verifiedValue: 'Yes (Confirmed Willing for Field)',
+          status: 'MATCH',
+          reason: 'Candidate confirmed interest in on-field client visits',
+        });
+      } else if (verifForm.interestedInFieldSales === false) {
+        rules.push({
+          rule: 'Field Sales Willingness',
+          requirement: 'Required for Field Position',
+          verifiedValue: 'No (Not Willing for Field)',
+          status: 'MISMATCH',
+          reason: 'Candidate not willing for required on-field travel',
+        });
+      } else {
+        rules.push({
+          rule: 'Field Sales Willingness',
+          requirement: 'Required for Field Position',
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Field sales willingness has not been confirmed on call',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Field Sales Willingness',
+        requirement: 'Office / Non-Field',
+        verifiedValue: 'Standard Fit',
+        status: 'MATCH',
+        reason: 'Standard desk role',
+      });
+    }
+
+    // 8. Automobile Domain Interest
+    const isAutoRole = (job.jobTitle || '').toLowerCase().includes('auto') || (job.company?.companyName?.toLowerCase().includes('motors') ?? false) || (job.jobDescription?.toLowerCase().includes('automobile') ?? false);
+    if (isAutoRole) {
+      if (verifForm.interestedInAutomobile === true) {
+        rules.push({
+          rule: 'Automobile Sector Fit',
+          requirement: 'Automobile Opening',
+          verifiedValue: 'Yes (Confirmed Auto Interest)',
+          status: 'MATCH',
+          reason: 'Candidate confirmed interest in automotive sector',
+        });
+      } else if (verifForm.interestedInAutomobile === false) {
+        rules.push({
+          rule: 'Automobile Sector Fit',
+          requirement: 'Automobile Opening',
+          verifiedValue: 'No Prior Preference',
+          status: 'REVIEW',
+          reason: 'Candidate has no prior auto preference - assess interest',
+        });
+      } else {
+        rules.push({
+          rule: 'Automobile Sector Fit',
+          requirement: 'Automobile Opening',
+          verifiedValue: 'Not Verified',
+          status: 'REVIEW',
+          reason: 'Automobile sector interest not confirmed with candidate',
+        });
+      }
+    } else {
+      rules.push({
+        rule: 'Industry Alignment',
+        requirement: 'General Opening',
+        verifiedValue: 'Standard Fit',
+        status: 'MATCH',
+        reason: 'General industry alignment',
+      });
+    }
+
+    // Overall Status Computation
+    const hasMismatch = rules.some((r) => r.status === 'MISMATCH');
+    const hasReview = rules.some((r) => r.status === 'REVIEW');
+    const overallStatus: 'MATCH' | 'MISMATCH' | 'REVIEW' = hasMismatch ? 'MISMATCH' : hasReview ? 'REVIEW' : 'MATCH';
+
+    return { overallStatus, rules };
+  }, [selectedApp, verifForm]);
 
   const handleCopy = (text: string, isPhone = true) => {
     navigator.clipboard.writeText(text);
@@ -352,11 +861,62 @@ export default function ExecutiveCallingWorkspacePage() {
     }
   };
 
+  const handleSaveVerification = async (advanceQueue = false) => {
+    if (!selectedApp) return;
+
+    setSavingVerification(true);
+    try {
+      const res = await fetch(`/api/applications/${selectedApp.id}/verification`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: verifForm.email || undefined,
+          age: verifForm.age ? Number(verifForm.age) : undefined,
+          gender: verifForm.gender || undefined,
+          currentLocation: verifForm.currentLocation || undefined,
+          appliedLocation: verifForm.appliedLocation || undefined,
+          education: verifForm.education || undefined,
+          experienceYears: verifForm.experienceYears !== undefined ? Number(verifForm.experienceYears) : undefined,
+          experienceMonths: verifForm.experienceMonths !== undefined ? Number(verifForm.experienceMonths) : undefined,
+          currentCompany: verifForm.currentCompany || undefined,
+          previousCompany: verifForm.previousCompany || undefined,
+          currentSalary: verifForm.currentSalary ? Number(verifForm.currentSalary) : undefined,
+          expectedSalary: verifForm.expectedSalary ? Number(verifForm.expectedSalary) : undefined,
+          noticePeriod: verifForm.noticePeriod || undefined,
+          hasTwoWheeler: verifForm.hasTwoWheeler,
+          hasDrivingLicense: verifForm.hasDrivingLicense,
+          interestedInFieldSales: verifForm.interestedInFieldSales,
+          interestedInAutomobile: verifForm.interestedInAutomobile,
+          skills: verifForm.skills || [],
+          languages: verifForm.languages || [],
+        }),
+      });
+
+      const d = await res.json();
+      if (!res.ok) {
+        showToast(d.error || 'Failed to save candidate verification', 'error');
+        return;
+      }
+
+      showToast('Candidate verification saved successfully! (Stage preserved)');
+
+      const currentId = selectedApp.id;
+      await fetchInitialData();
+
+      if (advanceQueue) {
+        advanceToNext(currentId);
+      }
+    } catch (err) {
+      showToast('Network error while saving verification', 'error');
+    } finally {
+      setSavingVerification(false);
+    }
+  };
+
   const handleLogOutcome = async (outcome: string) => {
     if (!selectedApp) return;
 
     if (outcome === 'CALLBACK') {
-      // Set default callback date to tomorrow
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       setCbDate(tomorrow.toISOString().split('T')[0]);
@@ -388,7 +948,6 @@ export default function ExecutiveCallingWorkspacePage() {
       showToast(`Call logged as ${outcome.replace(/_/g, ' ')}!`);
       const currentId = selectedApp.id;
 
-      // Refresh applications and call history
       await fetchInitialData();
       if (currentId) {
         await fetchCallHistory(currentId, selectedApp.candidateId);
@@ -453,36 +1012,11 @@ export default function ExecutiveCallingWorkspacePage() {
 
     switch (whatsAppType) {
       case 'FORM':
-        return `Hello ${cName},
-
-Thank you for speaking with Genius Consultancy regarding the *${jTitle}* opening at *${cNameComp}*.
-
-Please complete your official candidate application form using the secure link below:
-https://geniusconsultancy.in/form/${selectedApp.applicationCode}
-
-Kindly share your confirmation here once submitted.
-
-Best Regards,
-Genius Consultancy Operations`;
+        return `Hello ${cName},\n\nThank you for speaking with Genius Consultancy regarding the *${jTitle}* opening at *${cNameComp}*.\n\nPlease complete your official candidate application form using the secure link below:\nhttps://geniusconsultancy.in/form/${selectedApp.applicationCode}\n\nKindly share your confirmation here once submitted.\n\nBest Regards,\nGenius Consultancy Operations`;
       case 'CV_REQUEST':
-        return `Hello ${cName},
-
-We have received your profile for *${jTitle}* at *${cNameComp}*. Please share your updated CV / Resume document directly on this WhatsApp chat for immediate screening review.
-
-Thank you,
-Genius Consultancy Team`;
+        return `Hello ${cName},\n\nWe have received your profile for *${jTitle}* at *${cNameComp}*. Please share your updated CV / Resume document directly on this WhatsApp chat for immediate screening review.\n\nThank you,\nGenius Consultancy Team`;
       case 'INTERVIEW_INVITE':
-        return `Congratulations ${cName}!
-
-Your profile has been shortlisted for an in-person interview for the *${jTitle}* position at *${cNameComp}*.
-
-📅 Date & Time: Tomorrow 11:00 AM
-📍 Venue: Company Office
-
-Please carry 2 copies of your updated resume and ID proof.
-
-Best of luck,
-Genius Consultancy`;
+        return `Congratulations ${cName}!\n\nYour profile has been shortlisted for an in-person interview for the *${jTitle}* position at *${cNameComp}*.\n\n📅 Date & Time: Tomorrow 11:00 AM\n📍 Venue: Company Office\n\nPlease carry 2 copies of your updated resume and ID proof.\n\nBest of luck,\nGenius Consultancy`;
       default:
         return '';
     }
@@ -517,20 +1051,19 @@ Genius Consultancy`;
             </span>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-teal-100 text-teal-800 flex items-center gap-1">
               <PhoneCall className="w-3 h-3" />
-              Manual Dialing Workspace
+              Calling & Verification Workspace
             </span>
           </div>
           <h1 className="text-xl font-bold text-slate-900 mt-1 flex items-center gap-2">
-            Executive Calling Workspace
+            Executive Calling & Candidate Verification
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Work your assigned candidates, make calls using your external phone/dialer, and record the outcome in CRM.
+            Call candidates externally, verify qualifications vs job criteria in real time, and log outcomes with zero stage conflation.
           </p>
         </div>
 
         {/* Right Header Controls */}
         <div className="flex items-center gap-3">
-          {/* Auto Advance Toggle */}
           <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors">
             <input
               type="checkbox"
@@ -594,15 +1127,12 @@ Genius Consultancy`;
         {/* LEFT COLUMN: PRIORITIZED CALLING QUEUE (5 Columns) */}
         {/* ========================================================================= */}
         <div className="lg:col-span-5 flex flex-col space-y-3">
-          {/* Queue Filter Tabs */}
           <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm space-y-2.5">
             <div className="flex flex-wrap gap-1 border-b border-slate-100 pb-2 text-[11px]">
               <button
                 onClick={() => setActiveTab('ALL')}
                 className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  activeTab === 'ALL'
-                    ? 'bg-slate-900 text-white'
-                    : 'text-slate-600 hover:bg-slate-100'
+                  activeTab === 'ALL' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
                 All ({applications.length})
@@ -610,9 +1140,7 @@ Genius Consultancy`;
               <button
                 onClick={() => setActiveTab('CALLBACKS_DUE')}
                 className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  activeTab === 'CALLBACKS_DUE'
-                    ? 'bg-amber-600 text-white'
-                    : 'text-amber-700 bg-amber-50 hover:bg-amber-100'
+                  activeTab === 'CALLBACKS_DUE' ? 'bg-amber-600 text-white' : 'text-amber-700 hover:bg-amber-50'
                 }`}
               >
                 Callbacks ({callbacks.length})
@@ -620,45 +1148,31 @@ Genius Consultancy`;
               <button
                 onClick={() => setActiveTab('FOLLOWUPS_DUE')}
                 className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  activeTab === 'FOLLOWUPS_DUE'
-                    ? 'bg-sky-600 text-white'
-                    : 'text-sky-700 bg-sky-50 hover:bg-sky-100'
+                  activeTab === 'FOLLOWUPS_DUE' ? 'bg-sky-600 text-white' : 'text-sky-700 hover:bg-sky-50'
                 }`}
               >
-                Follow-ups
+                Follow-ups ({metrics.followupsDue})
               </button>
               <button
                 onClick={() => setActiveTab('NEW_ASSIGNED')}
                 className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  activeTab === 'NEW_ASSIGNED'
-                    ? 'bg-purple-600 text-white'
-                    : 'text-purple-700 bg-purple-50 hover:bg-purple-100'
+                  activeTab === 'NEW_ASSIGNED' ? 'bg-purple-600 text-white' : 'text-purple-700 hover:bg-purple-50'
                 }`}
               >
-                New Leads
-              </button>
-              <button
-                onClick={() => setActiveTab('NOT_WORKED')}
-                className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                  activeTab === 'NOT_WORKED'
-                    ? 'bg-rose-600 text-white'
-                    : 'text-rose-700 bg-rose-50 hover:bg-rose-100'
-                }`}
-              >
-                Unworked
+                New
               </button>
             </div>
 
-            {/* Search & Dropdown Filters */}
+            {/* Search and Dropdown Filters */}
             <div className="space-y-2">
               <div className="relative">
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-400" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search candidate, phone, code..."
-                  className="w-full pl-8 pr-2.5 py-1.5 border border-slate-200 rounded-lg text-xs outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  placeholder="Search name, phone, code..."
+                  className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
                 />
               </div>
 
@@ -666,7 +1180,7 @@ Genius Consultancy`;
                 <select
                   value={jobFilter}
                   onChange={(e) => setJobFilter(e.target.value)}
-                  className="px-2 py-1.5 border border-slate-200 rounded-lg text-[11px] text-slate-700 outline-none bg-white truncate"
+                  className="p-1.5 border border-slate-200 rounded-lg text-xs bg-slate-50 text-slate-700 outline-none truncate"
                 >
                   <option value="ALL">All Jobs ({uniqueJobs.length})</option>
                   {uniqueJobs.map((j) => (
@@ -679,9 +1193,9 @@ Genius Consultancy`;
                 <select
                   value={companyFilter}
                   onChange={(e) => setCompanyFilter(e.target.value)}
-                  className="px-2 py-1.5 border border-slate-200 rounded-lg text-[11px] text-slate-700 outline-none bg-white truncate"
+                  className="p-1.5 border border-slate-200 rounded-lg text-xs bg-slate-50 text-slate-700 outline-none truncate"
                 >
-                  <option value="ALL">All Companies ({uniqueCompanies.length})</option>
+                  <option value="ALL">All Companies</option>
                   {uniqueCompanies.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -692,11 +1206,11 @@ Genius Consultancy`;
             </div>
           </div>
 
-          {/* Queue Cards List */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col min-h-[520px] max-h-[640px]">
-            <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs font-semibold text-slate-700">
-              <span>Prioritized Queue ({prioritizedQueue.length})</span>
-              <span className="text-[11px] text-slate-500 font-normal">Sorted by urgency</span>
+          {/* Candidate List Pane */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col h-[650px] overflow-hidden">
+            <div className="p-3 border-b border-slate-100 flex items-center justify-between text-xs font-bold text-slate-700 uppercase tracking-wider">
+              <span>Candidate Calling Queue</span>
+              <span className="font-mono text-teal-600 font-bold">{prioritizedQueue.length} leads</span>
             </div>
 
             <div className="overflow-y-auto divide-y divide-slate-100 flex-1">
@@ -767,329 +1281,720 @@ Genius Consultancy`;
         </div>
 
         {/* ========================================================================= */}
-        {/* RIGHT COLUMN: ACTIVE CANDIDATE CALLING CARD (7 Columns) */}
+        {/* RIGHT COLUMN: ACTIVE CANDIDATE WORKSPACE (7 Columns) */}
         {/* ========================================================================= */}
         <div className="lg:col-span-7 flex flex-col space-y-4">
           {selectedApp ? (
             <>
-              {/* Candidate Calling Card */}
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-5">
-                {/* Header & Prominent Phone Number Banner */}
-                <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div>
-                    <div className="text-xs text-slate-300 flex items-center gap-2">
-                      <span>#{selectedApp.applicationCode}</span>
-                      <span>•</span>
-                      <span className="text-teal-400 font-semibold">
-                        {selectedApp.job.jobTitle}
-                      </span>
-                    </div>
-                    <div className="text-xl font-bold text-white mt-0.5">
-                      {selectedApp.candidate.fullName}
-                    </div>
-                    <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                      <Building2 className="w-3.5 h-3.5" />
-                      <span>{selectedApp.company.companyName}</span>
-                    </div>
+              {/* Header & Prominent Phone Number Banner */}
+              <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <div className="text-xs text-slate-300 flex items-center gap-2">
+                    <span>#{selectedApp.applicationCode}</span>
+                    <span>•</span>
+                    <span className="text-teal-400 font-semibold">
+                      {selectedApp.job.jobTitle}
+                    </span>
                   </div>
-
-                  {/* Prominent Copyable Phone Box */}
-                  <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 flex items-center gap-3">
-                    <div>
-                      <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-                        Candidate Phone
-                      </div>
-                      <div className="text-lg font-mono font-bold text-teal-300">
-                        {selectedApp.candidate.phone}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <button
-                        onClick={() => handleCopy(selectedApp.candidate.phone, true)}
-                        className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm"
-                        title="Copy phone number"
-                      >
-                        {copiedPhone ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{copiedPhone ? 'Copied!' : 'Copy'}</span>
-                      </button>
-
-                      <a
-                        href={`tel:${selectedApp.candidate.phone}`}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium flex items-center gap-1 transition-colors text-center justify-center"
-                        title="Open device dialer to call externally (does not log call automatically)"
-                      >
-                        <PhoneCall className="w-3 h-3 text-teal-400" />
-                        <span>Call Externally</span>
-                      </a>
-                    </div>
+                  <div className="text-xl font-bold text-white mt-0.5">
+                    {selectedApp.candidate.fullName}
+                  </div>
+                  <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>{selectedApp.company.companyName}</span>
                   </div>
                 </div>
 
-                {/* Candidate Operational Attributes Grid */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs">
+                {/* Honest Dialing Box */}
+                <div className="bg-slate-950/70 border border-slate-700 rounded-lg p-3 flex items-center gap-3">
                   <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Experience</span>
-                    <span className="font-bold text-slate-800">
-                      {selectedApp.candidate.experienceYears ?? 0}y {selectedApp.candidate.experienceMonths ?? 0}m
-                    </span>
+                    <div className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+                      Candidate Phone
+                    </div>
+                    <div className="text-lg font-mono font-bold text-teal-300">
+                      {selectedApp.candidate.phone}
+                    </div>
                   </div>
 
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Current Company</span>
-                    <span className="font-semibold text-slate-800 truncate block">
-                      {selectedApp.candidate.currentCompany || 'Not specified'}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Current CTC</span>
-                    <span className="font-bold text-slate-800">
-                      {selectedApp.candidate.currentSalary ? `₹${selectedApp.candidate.currentSalary.toLocaleString()}` : 'N/A'}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Expected CTC</span>
-                    <span className="font-bold text-teal-700">
-                      {selectedApp.candidate.expectedSalary ? `₹${selectedApp.candidate.expectedSalary.toLocaleString()}` : 'Negotiable'}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Location</span>
-                    <span className="font-semibold text-slate-800">
-                      {selectedApp.candidate.currentLocation || 'Not specified'}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Current Stage</span>
-                    <div className="mt-0.5"><StageBadge stage={selectedApp.currentStage} /></div>
-                  </div>
-
-                  <div className="col-span-2 flex items-center gap-3 pt-1">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${
-                        selectedApp.candidate.hasTwoWheeler
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-slate-200 text-slate-600'
-                      }`}
+                  <div className="flex flex-col gap-1">
+                    <button
+                      onClick={() => handleCopy(selectedApp.candidate.phone, true)}
+                      className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm"
+                      title="Copy phone number"
                     >
-                      <Bike className="w-3.5 h-3.5" />
-                      {selectedApp.candidate.hasTwoWheeler ? 'Has 2-Wheeler' : 'No Bike'}
-                    </span>
+                      {copiedPhone ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedPhone ? 'Copied!' : 'Copy'}</span>
+                    </button>
 
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold ${
-                        selectedApp.candidate.hasDrivingLicense
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-slate-200 text-slate-600'
-                      }`}
+                    <a
+                      href={`tel:${selectedApp.candidate.phone}`}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium flex items-center gap-1 transition-colors text-center justify-center"
+                      title="Open device dialer to call externally (does not log call automatically)"
                     >
-                      <CreditCard className="w-3.5 h-3.5" />
-                      {selectedApp.candidate.hasDrivingLicense ? 'Driving License' : 'No License'}
-                    </span>
+                      <PhoneCall className="w-3 h-3 text-teal-400" />
+                      <span>Call Externally</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              {/* Source vs Verified Navigation Tabs */}
+              <div className="bg-white rounded-xl border border-slate-200 p-2 shadow-sm flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    onClick={() => setActiveRightTab('VERIFICATION')}
+                    className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-colors ${
+                      activeRightTab === 'VERIFICATION'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    <span>Candidate Verification & Qualification</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveRightTab('CALL_LOG')}
+                    className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-colors ${
+                      activeRightTab === 'CALL_LOG'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <PhoneCall className="w-3.5 h-3.5" />
+                    <span>Record Call Outcome</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveRightTab('HISTORY')}
+                    className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-colors ${
+                      activeRightTab === 'HISTORY'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    <span>Call History ({callLogs.length})</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setShowWhatsAppModal(true)}
+                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+              </div>
+
+              {/* TAB 1: CANDIDATE VERIFICATION & LIVE QUALIFICATION MATCHING */}
+              {activeRightTab === 'VERIFICATION' && (
+                <div className="space-y-4">
+                  {/* Source Reference vs Candidate-Verified Notice */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                    <div className="flex items-start gap-2.5">
+                      <ShieldAlert className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-slate-800">Authoritative Qualification Rule: </span>
+                        <span className="text-slate-600">
+                          Candidate-verified data confirmed during this call is authoritative for qualification against the Job Requirement. Source data (WorkIndia, Naukri, Excel) is reference only. Differences (e.g. 25 → 27) are never mismatches.
+                        </span>
+                      </div>
+                    </div>
 
                     <button
-                      onClick={() => setShowWhatsAppModal(true)}
-                      className="ml-auto px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                      type="button"
+                      onClick={prefillFromSource}
+                      className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg font-bold flex items-center gap-1.5 shrink-0 transition-colors shadow-sm"
+                      title="Copy all source reference fields into the verified form to review and edit with candidate"
                     >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      <span>WhatsApp</span>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Pre-fill from Source</span>
                     </button>
                   </div>
-                </div>
 
-                {/* Call Notes Textarea */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1 flex items-center justify-between">
-                    <span>Call Observations & Remarks</span>
-                    <span className="text-[11px] text-slate-400 font-normal">Recorded with call log</span>
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={remarks}
-                    onChange={(e) => setRemarks(e.target.value)}
-                    placeholder="Type candidate response, salary discussion, notice period, location preference, or callback reason..."
-                    className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
-                  />
-                </div>
-
-                {/* FAST CALL OUTCOME BUTTONS GRID */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
-                      Record Call Interaction Outcome
-                    </label>
-                    <span className="text-[10px] text-slate-400">
-                      Creates CallLog & updates operational activity
-                    </span>
-                  </div>
-
-                  {/* Positive / Stage Advancing Outcomes */}
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <button
-                        onClick={() => handleLogOutcome('CONNECTED')}
-                        disabled={submitting}
-                        className="p-2.5 bg-teal-50 hover:bg-teal-100 border border-teal-300 text-teal-800 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
-                      >
-                        <PhoneCall className="w-4 h-4 text-teal-600" />
-                        <span>Connected</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleLogOutcome('SHORTLISTED')}
-                        disabled={submitting}
-                        className="p-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
-                      >
-                        <Sparkles className="w-4 h-4 text-purple-200" />
-                        <span>Shortlisted</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleLogOutcome('INTERESTED')}
-                        disabled={submitting}
-                        className="p-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
-                      >
-                        <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-                        <span>Interested</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleLogOutcome('CALLBACK')}
-                        disabled={submitting}
-                        className="p-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
-                      >
-                        <CalendarClock className="w-4 h-4 text-amber-200" />
-                        <span>Schedule Callback</span>
-                      </button>
+                  {/* Top: Source Reference Quick Comparison Strip */}
+                  <div className="bg-slate-900 text-white rounded-xl p-3.5 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-950/60 border border-amber-800/60 px-2 py-0.5 rounded">
+                          Source Reference (Master / Platform Import)
+                        </span>
+                        <span className="text-[11px] text-slate-400">Reference info from WorkIndia / Naukri / Excel</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">Read-Only Reference</span>
                     </div>
 
-                    {/* Unreachable / Busy Outcomes */}
-                    <div className="grid grid-cols-3 gap-2">
-                      <button
-                        onClick={() => handleLogOutcome('RNR')}
-                        disabled={submitting}
-                        className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
-                      >
-                        <PhoneOff className="w-3.5 h-3.5 text-slate-500" />
-                        <span>RNR (No Response)</span>
-                      </button>
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-[11px]">
+                      <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
+                        <div className="text-slate-400 text-[10px] uppercase font-semibold">Source Age</div>
+                        <div className="font-bold text-slate-200 mt-0.5">
+                          {selectedApp.candidate.age != null ? `${selectedApp.candidate.age} Yrs` : 'Not provided'}
+                        </div>
+                      </div>
 
-                      <button
-                        onClick={() => handleLogOutcome('BUSY')}
-                        disabled={submitting}
-                        className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
-                      >
-                        <PhoneForwarded className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Line Busy</span>
-                      </button>
+                      <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
+                        <div className="text-slate-400 text-[10px] uppercase font-semibold">Source Exp</div>
+                        <div className="font-bold text-slate-200 mt-0.5">
+                          {selectedApp.candidate.experienceYears ?? 0}y {selectedApp.candidate.experienceMonths ?? 0}m
+                        </div>
+                      </div>
 
-                      <button
-                        onClick={() => handleLogOutcome('SWITCHED_OFF')}
-                        disabled={submitting}
-                        className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
-                      >
-                        <PhoneOff className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Switched Off</span>
-                      </button>
-                    </div>
+                      <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
+                        <div className="text-slate-400 text-[10px] uppercase font-semibold">Source Expected CTC</div>
+                        <div className="font-bold text-slate-200 mt-0.5">
+                          {selectedApp.candidate.expectedSalary ? `₹${selectedApp.candidate.expectedSalary.toLocaleString()}` : 'Not provided'}
+                        </div>
+                      </div>
 
-                    {/* Disqualification Outcomes */}
-                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100">
-                      <button
-                        onClick={() => handleLogOutcome('NOT_INTERESTED')}
-                        disabled={submitting}
-                        className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
-                      >
-                        <span>Not Interested</span>
-                      </button>
+                      <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
+                        <div className="text-slate-400 text-[10px] uppercase font-semibold">Source Education</div>
+                        <div className="font-bold text-slate-200 mt-0.5 truncate" title={selectedApp.candidate.highestEducation || 'Not provided'}>
+                          {selectedApp.candidate.highestEducation || 'Not provided'}
+                        </div>
+                      </div>
 
-                      <button
-                        onClick={() => handleLogOutcome('NOT_ELIGIBLE')}
-                        disabled={submitting}
-                        className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
-                      >
-                        <span>Not Eligible</span>
-                      </button>
+                      <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
+                        <div className="text-slate-400 text-[10px] uppercase font-semibold">Source Location</div>
+                        <div className="font-bold text-slate-200 mt-0.5 truncate" title={selectedApp.candidate.currentLocation || 'Not provided'}>
+                          {selectedApp.candidate.currentLocation || 'Not provided'}
+                        </div>
+                      </div>
 
-                      <button
-                        onClick={() => handleLogOutcome('WRONG_NUMBER')}
-                        disabled={submitting}
-                        className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
-                      >
-                        <span>Wrong Number</span>
-                      </button>
+                      <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
+                        <div className="text-slate-400 text-[10px] uppercase font-semibold">Source Assets</div>
+                        <div className="font-bold text-slate-200 mt-0.5 text-[10px]">
+                          {selectedApp.candidate.hasTwoWheeler ? 'Bike: Yes' : 'Bike: No'} • {selectedApp.candidate.hasDrivingLicense ? 'DL: Yes' : 'DL: No'}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Chronological Call History Timeline */}
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                  <div className="flex items-center gap-2">
-                    <History className="w-4 h-4 text-slate-500" />
-                    <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                      Candidate Call History ({callLogs.length})
-                    </h3>
-                  </div>
-                  {loadingHistory && (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-600" />
-                  )}
-                </div>
-
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1 divide-y divide-slate-100">
-                  {callLogs.length === 0 ? (
-                    <div className="py-6 text-center text-slate-400 text-xs">
-                      No calls logged yet for this candidate.
-                    </div>
-                  ) : (
-                    callLogs.map((log) => (
-                      <div key={log.id} className="pt-2 first:pt-0 text-xs space-y-1">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <Badge variant={log.callOutcome === 'SHORTLISTED' || log.callOutcome === 'INTERESTED' ? 'success' : log.callOutcome === 'CALLBACK' ? 'warning' : 'neutral'}>
-                              {log.callOutcome.replace(/_/g, ' ')}
-                            </Badge>
-                            <span className="text-[11px] text-slate-500">
-                              by {log.executive?.fullName || 'Executive'}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {new Date(log.createdAt).toLocaleString([], {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
+                  {/* Live Qualification Status Card */}
+                  {qualificationResults && (
+                    <div className={`p-4 rounded-xl border shadow-sm ${
+                      qualificationResults.overallStatus === 'MATCH'
+                        ? 'bg-emerald-50/70 border-emerald-200'
+                        : qualificationResults.overallStatus === 'MISMATCH'
+                        ? 'bg-rose-50/70 border-rose-200'
+                        : 'bg-amber-50/70 border-amber-200'
+                    }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                            Live Qualification Engine (Candidate-Verified vs Job Requirement)
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            Opening: {selectedApp.job.jobTitle}
                           </span>
                         </div>
-                        {log.remarks && (
-                          <p className="text-[11px] text-slate-700 bg-slate-50 p-1.5 rounded border border-slate-100">
-                            {log.remarks}
-                          </p>
-                        )}
+
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${
+                          qualificationResults.overallStatus === 'MATCH'
+                            ? 'bg-emerald-600 text-white'
+                            : qualificationResults.overallStatus === 'MISMATCH'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-amber-600 text-white'
+                        }`}>
+                          {qualificationResults.overallStatus === 'MATCH' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                          {qualificationResults.overallStatus === 'MISMATCH' && <XCircle className="w-3.5 h-3.5" />}
+                          {qualificationResults.overallStatus === 'REVIEW' && <HelpCircle className="w-3.5 h-3.5" />}
+                          <span>
+                            {qualificationResults.overallStatus === 'MATCH' ? 'QUALIFIED MATCH' : qualificationResults.overallStatus === 'MISMATCH' ? 'QUALIFICATION MISMATCH' : 'UNDER REVIEW'}
+                          </span>
+                        </span>
                       </div>
-                    ))
+
+                      {/* Rule Results Grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                        {qualificationResults.rules.map((r, idx) => (
+                          <div
+                            key={idx}
+                            className={`p-2.5 rounded-lg border flex items-start justify-between gap-2 ${
+                              r.status === 'MATCH'
+                                ? 'bg-white border-emerald-200 text-slate-800 shadow-2xs'
+                                : r.status === 'MISMATCH'
+                                ? 'bg-white border-rose-200 text-rose-900 shadow-2xs'
+                                : 'bg-white border-amber-200 text-amber-900 shadow-2xs'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <div className="font-bold text-[11px] text-slate-800">{r.rule}</div>
+                              <div className="text-[10px] text-slate-500">
+                                <span className="font-semibold text-slate-600">Req:</span> {r.requirement} • <span className="font-semibold text-slate-600">Verified:</span> {r.verifiedValue}
+                              </div>
+                              <div className="text-[11px] text-slate-600">{r.reason}</div>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                              r.status === 'MATCH'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : r.status === 'MISMATCH'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {r.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
+
+                  {/* Candidate Verification Editable Form */}
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                            Candidate-Verified Profile Data
+                          </h3>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800">
+                            Authoritative
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          Confirm details directly with candidate during phone conversation. (Source master remains intact).
+                        </p>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveVerification(false)}
+                          disabled={savingVerification}
+                          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>{savingVerification ? 'Saving...' : 'Save Verification'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSaveVerification(true)}
+                          disabled={savingVerification}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+                        >
+                          <span>Save & Next</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Verification Form Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Age (Years)
+                        </label>
+                        <input
+                          type="number"
+                          value={verifForm.age ?? ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, age: e.target.value ? parseInt(e.target.value) : null })}
+                          placeholder="e.g. 24"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Gender
+                        </label>
+                        <select
+                          value={verifForm.gender || 'Male'}
+                          onChange={(e) => setVerifForm({ ...verifForm, gender: e.target.value })}
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500 bg-white"
+                        >
+                          <option value="Male">Male</option>
+                          <option value="Female">Female</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Verified Email
+                        </label>
+                        <input
+                          type="email"
+                          value={verifForm.email || ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, email: e.target.value })}
+                          placeholder="candidate@email.com"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Current Location / City
+                        </label>
+                        <input
+                          type="text"
+                          value={verifForm.currentLocation || ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, currentLocation: e.target.value })}
+                          placeholder="e.g. Mumbai, Andheri"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Applied / Preferred Location
+                        </label>
+                        <input
+                          type="text"
+                          value={verifForm.appliedLocation || ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, appliedLocation: e.target.value })}
+                          placeholder="e.g. Pune / Mumbai"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Highest Education
+                        </label>
+                        <input
+                          type="text"
+                          value={verifForm.education || ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, education: e.target.value })}
+                          placeholder="e.g. Graduate, B.Com, 12th"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Experience (Years & Months)
+                        </label>
+                        <div className="grid grid-cols-2 gap-1">
+                          <input
+                            type="number"
+                            min="0"
+                            value={verifForm.experienceYears ?? ''}
+                            onChange={(e) => setVerifForm({ ...verifForm, experienceYears: e.target.value ? parseInt(e.target.value) : null })}
+                            placeholder="Years"
+                            className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            max="11"
+                            value={verifForm.experienceMonths ?? ''}
+                            onChange={(e) => setVerifForm({ ...verifForm, experienceMonths: e.target.value ? parseInt(e.target.value) : null })}
+                            placeholder="Months"
+                            className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Current Company
+                        </label>
+                        <input
+                          type="text"
+                          value={verifForm.currentCompany || ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, currentCompany: e.target.value })}
+                          placeholder="e.g. ABC Pvt Ltd"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Previous Company
+                        </label>
+                        <input
+                          type="text"
+                          value={verifForm.previousCompany || ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, previousCompany: e.target.value })}
+                          placeholder="e.g. XYZ Logistics"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Current In-Hand CTC (₹)
+                        </label>
+                        <input
+                          type="number"
+                          value={verifForm.currentSalary ?? ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, currentSalary: e.target.value ? parseFloat(e.target.value) : null })}
+                          placeholder="e.g. 25000"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Expected In-Hand CTC (₹)
+                        </label>
+                        <input
+                          type="number"
+                          value={verifForm.expectedSalary ?? ''}
+                          onChange={(e) => setVerifForm({ ...verifForm, expectedSalary: e.target.value ? parseFloat(e.target.value) : null })}
+                          placeholder="e.g. 30000"
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Notice Period
+                        </label>
+                        <select
+                          value={verifForm.noticePeriod || 'Immediate'}
+                          onChange={(e) => setVerifForm({ ...verifForm, noticePeriod: e.target.value })}
+                          className="w-full p-2 border border-slate-200 rounded-lg outline-none focus:border-teal-500 bg-white"
+                        >
+                          <option value="Immediate">Immediate / 0 Days</option>
+                          <option value="7 Days">7 Days</option>
+                          <option value="15 Days">15 Days</option>
+                          <option value="30 Days">30 Days</option>
+                          <option value="45+ Days">45+ Days</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Checkbox Attributes */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer bg-slate-50 p-2 rounded-lg border border-slate-200">
+                        <input
+                          type="checkbox"
+                          checked={verifForm.hasTwoWheeler === true}
+                          onChange={(e) => setVerifForm({ ...verifForm, hasTwoWheeler: e.target.checked })}
+                          className="rounded text-teal-600 focus:ring-teal-500"
+                        />
+                        <Bike className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Has 2-Wheeler</span>
+                      </label>
+
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer bg-slate-50 p-2 rounded-lg border border-slate-200">
+                        <input
+                          type="checkbox"
+                          checked={verifForm.hasDrivingLicense === true}
+                          onChange={(e) => setVerifForm({ ...verifForm, hasDrivingLicense: e.target.checked })}
+                          className="rounded text-teal-600 focus:ring-teal-500"
+                        />
+                        <CreditCard className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Has Driving License</span>
+                      </label>
+
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer bg-slate-50 p-2 rounded-lg border border-slate-200">
+                        <input
+                          type="checkbox"
+                          checked={verifForm.interestedInFieldSales === true}
+                          onChange={(e) => setVerifForm({ ...verifForm, interestedInFieldSales: e.target.checked })}
+                          className="rounded text-teal-600 focus:ring-teal-500"
+                        />
+                        <Briefcase className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Willing for Field Sales</span>
+                      </label>
+
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer bg-slate-50 p-2 rounded-lg border border-slate-200">
+                        <input
+                          type="checkbox"
+                          checked={verifForm.interestedInAutomobile === true}
+                          onChange={(e) => setVerifForm({ ...verifForm, interestedInAutomobile: e.target.checked })}
+                          className="rounded text-teal-600 focus:ring-teal-500"
+                        />
+                        <Car className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Automobile Sector Fit</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* TAB 2: RECORD CALL OUTCOME & NOTES */}
+              {activeRightTab === 'CALL_LOG' && (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1 flex items-center justify-between">
+                      <span>Call Observations & Remarks</span>
+                      <span className="text-[11px] text-slate-400 font-normal">Recorded with call log</span>
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={remarks}
+                      onChange={(e) => setRemarks(e.target.value)}
+                      placeholder="Type candidate response, salary discussion, notice period, location preference, or callback reason..."
+                      className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                        Record Call Interaction Outcome
+                      </label>
+                      <span className="text-[10px] text-slate-400">
+                        Creates CallLog & updates operational activity
+                      </span>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <button
+                          onClick={() => handleLogOutcome('CONNECTED')}
+                          disabled={submitting}
+                          className="p-2.5 bg-teal-50 hover:bg-teal-100 border border-teal-300 text-teal-800 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                        >
+                          <PhoneCall className="w-4 h-4 text-teal-600" />
+                          <span>Connected</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('SHORTLISTED')}
+                          disabled={submitting}
+                          className="p-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                        >
+                          <Sparkles className="w-4 h-4 text-purple-200" />
+                          <span>Shortlisted</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('INTERESTED')}
+                          disabled={submitting}
+                          className="p-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                        >
+                          <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                          <span>Interested</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('CALLBACK')}
+                          disabled={submitting}
+                          className="p-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shadow-sm"
+                        >
+                          <CalendarClock className="w-4 h-4 text-amber-200" />
+                          <span>Schedule Callback</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={() => handleLogOutcome('RNR')}
+                          disabled={submitting}
+                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                        >
+                          <PhoneOff className="w-3.5 h-3.5 text-slate-500" />
+                          <span>RNR (No Response)</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('BUSY')}
+                          disabled={submitting}
+                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                        >
+                          <PhoneForwarded className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Line Busy</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('SWITCHED_OFF')}
+                          disabled={submitting}
+                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                        >
+                          <PhoneOff className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Switched Off</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100">
+                        <button
+                          onClick={() => handleLogOutcome('NOT_INTERESTED')}
+                          disabled={submitting}
+                          className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                        >
+                          <span>Not Interested</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('NOT_ELIGIBLE')}
+                          disabled={submitting}
+                          className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                        >
+                          <span>Not Eligible</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleLogOutcome('WRONG_NUMBER')}
+                          disabled={submitting}
+                          className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                        >
+                          <span>Wrong Number</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: CALL HISTORY */}
+              {activeRightTab === 'HISTORY' && (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4 text-slate-500" />
+                      <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                        Candidate Call History ({callLogs.length})
+                      </h3>
+                    </div>
+                    {loadingHistory && (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-600" />
+                    )}
+                  </div>
+
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1 divide-y divide-slate-100">
+                    {callLogs.length === 0 ? (
+                      <div className="py-6 text-center text-slate-400 text-xs">
+                        No calls logged yet for this candidate.
+                      </div>
+                    ) : (
+                      callLogs.map((log) => (
+                        <div key={log.id} className="pt-2 first:pt-0 text-xs space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant={log.callOutcome === 'SHORTLISTED' || log.callOutcome === 'INTERESTED' ? 'success' : log.callOutcome === 'CALLBACK' ? 'warning' : 'neutral'}>
+                                {log.callOutcome.replace(/_/g, ' ')}
+                              </Badge>
+                              <span className="text-[11px] text-slate-500">
+                                by {log.executive?.fullName || 'Executive'}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {new Date(log.createdAt).toLocaleString([], {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
+                          {log.remarks && (
+                            <p className="text-[11px] text-slate-700 bg-slate-50 p-1.5 rounded border border-slate-100">
+                              {log.remarks}
+                            </p>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-16 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-3">
               <PhoneCall className="w-8 h-8 text-slate-300" />
-              <p>Select a candidate from the prioritized queue on the left to begin calling.</p>
+              <p>Select a candidate from the prioritized queue on the left to begin calling and verification.</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* ========================================================================= */}
       {/* CALLBACK SCHEDULING MODAL */}
-      {/* ========================================================================= */}
       <Modal
         isOpen={showCallbackModal}
         onClose={() => setShowCallbackModal(false)}
@@ -1101,49 +2006,49 @@ Genius Consultancy`;
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Callback Date <span className="text-rose-500">*</span>
+                Callback Date *
               </label>
               <input
                 type="date"
                 required
                 value={cbDate}
                 onChange={(e) => setCbDate(e.target.value)}
-                className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
+                className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
               />
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Callback Time <span className="text-rose-500">*</span>
+                Callback Time *
               </label>
               <input
                 type="time"
                 required
                 value={cbTime}
                 onChange={(e) => setCbTime(e.target.value)}
-                className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
+                className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
               />
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Priority Level
+              Priority
             </label>
             <select
               value={cbPriority}
               onChange={(e) => setCbPriority(e.target.value as any)}
-              className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none bg-white"
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs bg-slate-50 focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 outline-none"
             >
-              <option value="HIGH">HIGH - Urgent Interested Lead</option>
-              <option value="MEDIUM">MEDIUM - Standard Callback</option>
-              <option value="LOW">LOW - Follow-up if time permits</option>
+              <option value="HIGH">High Priority (Strong interest)</option>
+              <option value="MEDIUM">Medium Priority (Standard callback)</option>
+              <option value="LOW">Low Priority (Tentative)</option>
             </select>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Callback Reason / Notes
+              Reason / Candidate Notes
             </label>
             <textarea
               rows={2}
@@ -1173,9 +2078,7 @@ Genius Consultancy`;
         </form>
       </Modal>
 
-      {/* ========================================================================= */}
       {/* WHATSAPP TEMPLATES MODAL */}
-      {/* ========================================================================= */}
       <Modal
         isOpen={showWhatsAppModal}
         onClose={() => setShowWhatsAppModal(false)}

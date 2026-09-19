@@ -58,6 +58,7 @@ model User {
   callLogs                   CallLog[]
   callbacks                  Callback[]
   screenings                 Screening[]
+  verificationsDone          ApplicationVerification[]      @relation("VerifiedByUser")
   clientSubmissions          ClientSubmission[]
   interviewsUpdated          Interview[]
   qualityReviewsReceived     QualityReview[]                @relation("ExecutiveQualityReviews")
@@ -418,6 +419,7 @@ model Application {
   callLogs             CallLog[]
   callbacks            Callback[]
   screenings           Screening[]
+  verification         ApplicationVerification?
   submissionItems      ClientSubmissionItem[]
   interviews           Interview[]
   qualityReviews       QualityReview[]
@@ -755,4 +757,47 @@ model Notification {
   @@index([userId, isRead])
   @@index([createdAt])
   @@map("notifications")
+}
+
+// ==========================================
+// 9. CANDIDATE VERIFICATION & QUALIFICATION
+// ==========================================
+
+model ApplicationVerification {
+  id                     String      @id @default(uuid())
+  applicationId          String      @unique
+  verifiedByUserId       String?
+  email                  String?
+  age                    Int?
+  gender                 String?
+  currentLocation        String?
+  appliedLocation        String?
+  education              String?
+  experienceYears        Int?        @default(0)
+  experienceMonths       Int?        @default(0)
+  currentCompany         String?
+  previousCompany        String?
+  currentSalary          Decimal?    @db.Decimal(12, 2)
+  expectedSalary         Decimal?    @db.Decimal(12, 2)
+  noticePeriod           String?
+  hasTwoWheeler          Boolean?
+  hasDrivingLicense      Boolean?
+  interestedInFieldSales Boolean?
+  interestedInAutomobile Boolean?
+  skills                 Json        @default("[]")
+  languages              Json        @default("[]")
+  assets                 Json        @default("[]")
+  customAnswers          Json        @default("{}")
+  qualificationStatus    String?     @default("PENDING") // MATCH, MISMATCH, REVIEW, PENDING
+  matchSummary           Json        @default("[]")
+  remarks                String?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  application            Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  verifiedByUser         User?       @relation("VerifiedByUser", fields: [verifiedByUserId], references: [id])
+
+  @@index([applicationId])
+  @@index([verifiedByUserId])
+  @@map("application_verifications")
 }
