@@ -273,9 +273,24 @@ export class ImportService {
       if (phone) dashboardPhoneMap.set(phone, row);
     }
 
-    // 1. Create ImportBatch
-    const totalBatches = await prisma.importBatch.count();
-    const batchCode = `BATCH-${String(totalBatches + 1).padStart(5, '0')}`;
+    // 1. Validate Target Job Requirement and resolve effective company
+    const targetJob = await prisma.jobRequirement.findUnique({
+      where: { id: targetJobId },
+      include: { company: true },
+    });
+    if (!targetJob) {
+      throw new Error(`Target Job Requirement with ID '${targetJobId}' was not found.`);
+    }
+    const effectiveCompanyId = targetJob.companyId || targetCompanyId;
+
+    // 2. Create ImportBatch with guaranteed collision-free batchCode
+    let batchCount = await prisma.importBatch.count();
+    let batchNum = batchCount + 1;
+    let batchCode = `BATCH-${String(batchNum).padStart(5, '0')}`;
+    while (await prisma.importBatch.findUnique({ where: { batchCode } })) {
+      batchNum++;
+      batchCode = `BATCH-${String(batchNum).padStart(5, '0')}`;
+    }
 
     const batch = await prisma.importBatch.create({
       data: {
@@ -291,10 +306,25 @@ export class ImportService {
     let duplicateCount = 0;
     let skippedCount = 0;
 
-    // Process rows in chunks
+    // Process rows
     for (const row of candidateMasterData) {
-      const rawName = String(row['Candidate Name'] || row['Name'] || '').trim();
-      const rawPhone = row['Phone Number'] || row['Contact number'] || row['Phone'] || '';
+      const rawName = String(
+        row['Candidate Name'] ||
+        row['Name'] ||
+        row['Full Name'] ||
+        row['Candidate'] ||
+        row['Applicant Name'] ||
+        ''
+      ).trim();
+
+      const rawPhone =
+        row['Phone Number'] ||
+        row['Contact number'] ||
+        row['Phone'] ||
+        row['Mobile'] ||
+        row['Contact'] ||
+        row['Mobile Number'] ||
+        '';
       const normPhone = normalizeIndianPhone(rawPhone);
 
       if (!rawName || !normPhone) {
@@ -305,28 +335,75 @@ export class ImportService {
       const dashRow = dashboardPhoneMap.get(normPhone) || {};
       const isShortlisted = shortlistedPhoneMap.has(normPhone);
 
-      const location = String(row['Location'] || dashRow['Location'] || dashRow['Current location'] || '').trim();
-      const education = String(row['Education'] || dashRow['Education'] || '').trim();
-      const rawExp = String(row['Experience'] || dashRow['Years of experience'] || '');
+      const location = String(
+        row['Location'] ||
+        row['Current location'] ||
+        row['City'] ||
+        dashRow['Location'] ||
+        dashRow['Current location'] ||
+        ''
+      ).trim();
+
+      const education = String(
+        row['Education'] ||
+        row['Qualification'] ||
+        dashRow['Education'] ||
+        dashRow['Qualification'] ||
+        ''
+      ).trim();
+
+      const rawExp = String(
+        row['Experience'] ||
+        row['Years of experience'] ||
+        row['Exp'] ||
+        dashRow['Experience'] ||
+        dashRow['Years of experience'] ||
+        ''
+      );
       const expYears = parseInt(rawExp.replace(/\D/g, '')) || 0;
-      const currentJob = String(row['Current/Latest Job'] || dashRow['Previous/current company'] || '').trim();
-      const assets = String(row['Assets'] || '');
-      const hasBike = /bike|two\s*wheeler/i.test(assets) || dashRow['Have 2wheeler with license'] === 1 || dashRow['Have 2wheeler with license'] === '1';
-      const hasLicense = /license|dl/i.test(assets) || dashRow['Have 2wheeler with license'] === 1;
+
+      const currentJob = String(
+        row['Current/Latest Job'] ||
+        row['Previous/current company'] ||
+        row['Current Company'] ||
+        dashRow['Current/Latest Job'] ||
+        dashRow['Previous/current company'] ||
+        ''
+      ).trim();
+
+      const assets = String(row['Assets'] || dashRow['Assets'] || '');
+      const hasBike =
+        /bike|two\s*wheeler/i.test(assets) ||
+        dashRow['Have 2wheeler with license'] === 1 ||
+        dashRow['Have 2wheeler with license'] === '1' ||
+        String(dashRow['Have 2wheeler with license']).toLowerCase() === 'yes';
+
+      const hasLicense =
+        /license|dl/i.test(assets) ||
+        dashRow['Have 2wheeler with license'] === 1 ||
+        dashRow['Have 2wheeler with license'] === '1' ||
+        String(dashRow['Have 2wheeler with license']).toLowerCase() === 'yes';
 
       // Extract skills
-      const rawSkills = String(row['Skills / Notes'] || '');
+      const rawSkills = String(row['Skills / Notes'] || row['Skills'] || row['Key Skills'] || '');
       const skillsArray = rawSkills
         ? rawSkills.split(',').map((s) => s.trim()).filter(Boolean)
         : ['Sales', 'Communication'];
 
       // Extract languages
-      const rawLanguages = String(row['Languages'] || '');
+      const rawLanguages = String(row['Languages'] || row['Language'] || row['Languages Known'] || '');
       const languagesArray = rawLanguages
         ? rawLanguages.split(',').map((l) => l.trim()).filter(Boolean)
         : ['Hindi', 'Gujarati'];
 
-      const rawEmail = String(row['Email'] || row['Email Address'] || row['Mail'] || '').trim().toLowerCase();
+      const rawEmail = String(
+        row['Email'] ||
+        row['Email Address'] ||
+        row['Mail'] ||
+        row['Email ID'] ||
+        dashRow['Email'] ||
+        ''
+      ).trim().toLowerCase();
       const normEmail = rawEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ? rawEmail : null;
 
       // Check existing candidate by normalized phone OR exact email (HIGH confidence match)
@@ -340,8 +417,13 @@ export class ImportService {
       });
 
       if (!candidate) {
-        const totalCandidates = await prisma.candidate.count();
-        const candidateCode = `CAN-${String(totalCandidates + 1).padStart(6, '0')}`;
+        let candCount = await prisma.candidate.count();
+        let candNum = candCount + 1;
+        let candidateCode = `CAN-${String(candNum).padStart(6, '0')}`;
+        while (await prisma.candidate.findUnique({ where: { candidateCode } })) {
+          candNum++;
+          candidateCode = `CAN-${String(candNum).padStart(6, '0')}`;
+        }
 
         candidate = await prisma.candidate.create({
           data: {
@@ -349,6 +431,7 @@ export class ImportService {
             fullName: rawName,
             rawPhone: String(rawPhone),
             normalizedPhone: normPhone,
+            email: normEmail,
             currentLocation: location,
             education,
             experienceYears: expYears,
@@ -364,6 +447,22 @@ export class ImportService {
         });
       } else {
         duplicateCount++;
+        // Enrich existing candidate if details were missing
+        const updateData: any = {};
+        if (!candidate.email && normEmail) updateData.email = normEmail;
+        if (!candidate.currentLocation && location) updateData.currentLocation = location;
+        if (!candidate.education && education) updateData.education = education;
+        if (!candidate.currentJob && currentJob) updateData.currentJob = currentJob;
+        if (candidate.experienceYears === 0 && expYears > 0) updateData.experienceYears = expYears;
+        if (!candidate.hasTwoWheeler && hasBike) updateData.hasTwoWheeler = true;
+        if (!candidate.hasDrivingLicense && hasLicense) updateData.hasDrivingLicense = true;
+
+        if (Object.keys(updateData).length > 0) {
+          candidate = await prisma.candidate.update({
+            where: { id: candidate.id },
+            data: updateData,
+          });
+        }
       }
 
       // Check existing application for this candidate & job
@@ -372,8 +471,13 @@ export class ImportService {
       });
 
       if (!existingApp) {
-        const totalApps = await prisma.application.count();
-        const appCode = `APP-${String(totalApps + 1).padStart(6, '0')}`;
+        let appCount = await prisma.application.count();
+        let appNum = appCount + 1;
+        let appCode = `APP-${String(appNum).padStart(6, '0')}`;
+        while (await prisma.application.findUnique({ where: { applicationCode: appCode } })) {
+          appNum++;
+          appCode = `APP-${String(appNum).padStart(6, '0')}`;
+        }
 
         const initialStage = isShortlisted ? 'SHORTLISTED' : 'NEW';
         const formStatus = isShortlisted ? 'RECEIVED' : 'PENDING';
@@ -384,7 +488,7 @@ export class ImportService {
             applicationCode: appCode,
             candidateId: candidate.id,
             jobId: targetJobId,
-            companyId: targetCompanyId,
+            companyId: effectiveCompanyId,
             currentStage: initialStage,
             formStatus,
             cvStatus,
@@ -394,12 +498,25 @@ export class ImportService {
             createdById: uploadedById,
           },
         });
+      } else if (isShortlisted && existingApp.currentStage === 'NEW') {
+        // Reconcile shortlist state for existing application
+        await prisma.application.update({
+          where: { id: existingApp.id },
+          data: {
+            currentStage: 'SHORTLISTED',
+            formStatus: 'RECEIVED',
+            cvStatus: 'CV_RECEIVED',
+            formReceivedAt: existingApp.formReceivedAt || new Date(),
+            cvReceivedAt: existingApp.cvReceivedAt || new Date(),
+            readyForScreeningAt: existingApp.readyForScreeningAt || new Date(),
+          },
+        });
       }
 
       importedCount++;
     }
 
-    // Update batch status
+    // Update batch status to COMMITTED
     await prisma.importBatch.update({
       where: { id: batch.id },
       data: {

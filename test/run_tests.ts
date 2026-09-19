@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { normalizeIndianPhone } from '../src/server/utils/phone';
 import { signAuthToken, verifyAuthToken } from '../src/server/utils/jwt';
+import { DEFAULT_ROLE_PERMISSIONS } from '../src/server/constants/permissions';
 import { AssignmentService } from '../src/server/services/AssignmentService';
 import { CallingService } from '../src/server/services/CallingService';
 import { ScreeningService } from '../src/server/services/ScreeningService';
@@ -552,10 +553,14 @@ async function runTestSuite() {
     const originalName = backedUpCandidate.fullName;
 
     // Ensure candidate exists before mutating
-    const existingCand = await prisma.candidate.findUnique({ where: { id: backedUpCandidate.id } });
+    let existingCand = await prisma.candidate.findUnique({ where: { id: backedUpCandidate.id } });
+    if (!existingCand && backedUpCandidate.normalizedPhone) {
+      existingCand = await prisma.candidate.findUnique({ where: { normalizedPhone: backedUpCandidate.normalizedPhone } });
+    }
+
     if (!existingCand) {
       const superAdmin = await prisma.user.findFirst();
-      await prisma.candidate.create({
+      existingCand = await prisma.candidate.create({
         data: {
           id: backedUpCandidate.id,
           candidateCode: backedUpCandidate.candidateCode || `CAND-BK-${Date.now().toString().slice(-6)}`,
@@ -568,11 +573,11 @@ async function runTestSuite() {
 
     // Mutate the record in the database
     await prisma.candidate.update({
-      where: { id: backedUpCandidate.id },
+      where: { id: existingCand.id },
       data: { fullName: 'TEMPORARILY_MUTATED_NAME_FOR_TEST' },
     });
 
-    const mutatedCheck = await prisma.candidate.findUnique({ where: { id: backedUpCandidate.id } });
+    const mutatedCheck = await prisma.candidate.findUnique({ where: { id: existingCand.id } });
     assert(mutatedCheck?.fullName === 'TEMPORARILY_MUTATED_NAME_FOR_TEST', 'Database record mutated prior to restoration test');
 
     // Execute live restore from backup
@@ -580,7 +585,7 @@ async function runTestSuite() {
     assert(liveRestoreRes.restoredCounts?.candidates! > 0, `Live restore executed and restored ${liveRestoreRes.restoredCounts?.candidates} candidate records`);
 
     // Verify record was restored in database
-    const restoredCandidate = await prisma.candidate.findUnique({ where: { id: backedUpCandidate.id } });
+    const restoredCandidate = await prisma.candidate.findUnique({ where: { id: existingCand.id } });
     assert(restoredCandidate?.fullName === originalName, 'Database record successfully restored to original state from backup');
   }
 
@@ -1160,6 +1165,405 @@ async function runTestSuite() {
     }
   }
   assert(csvRbacBlocked, 'Server-side RBAC strictly blocks executive from exporting another executive CSV data');
+
+  // ==========================================
+  // TEST SUITE 19: Multi-Sheet Excel Import Commit & Reconciliation
+  // ==========================================
+  console.log('\n--- Test Suite 19: Multi-Sheet Excel Import Commit & Reconciliation ---');
+
+  // 1. Construct a comprehensive multi-sheet workbook matching production structure
+  const multiSheetWb = XLSX.utils.book_new();
+
+  const testTime19 = Date.now();
+  const phone1 = '91' + testTime19.toString().slice(-8);
+  const phone2 = '92' + (testTime19 + 1).toString().slice(-8);
+  const phone3 = '93' + (testTime19 + 2).toString().slice(-8);
+
+  const email1 = `rahul.${testTime19}@testcrm.com`;
+  const email2 = `priya.${testTime19}@testcrm.com`;
+  const email3 = `arjun.${testTime19}@testcrm.com`;
+
+  const candidateMasterRows = [
+    {
+      'Candidate Name': 'Demo Rahul Patil',
+      'Phone Number': phone1,
+      'Email': email1,
+      'Location': 'Pune, Maharashtra',
+      'Education': 'B.Com Graduate',
+      'Experience': '2 Years',
+      'Current/Latest Job': 'Retail Sales Exec',
+      'Assets': 'Bike with Driving License',
+    },
+    {
+      'Candidate Name': 'Demo Priya Kulkarni',
+      'Phone Number': phone2,
+      'Email': email2,
+      'Location': 'Mumbai, Maharashtra',
+      'Education': 'B.Sc IT',
+      'Experience': '3 Years',
+      'Current/Latest Job': 'Telecaller',
+      'Assets': 'Two Wheeler',
+    },
+    {
+      'Candidate Name': 'Demo Arjun Shinde',
+      'Phone Number': phone3,
+      'Email': email3,
+      'Location': 'Nagpur, Maharashtra',
+      'Education': 'HSC 12th',
+      'Experience': '1 Year',
+      'Current/Latest Job': 'Field Agent',
+      'Assets': '',
+    },
+  ];
+
+  const dashboardRows = [
+    {
+      'Candidate Name': 'Demo Rahul Patil',
+      'Contact number': phone1,
+      'Location': 'Pune City',
+      'Years of experience': '2',
+      'Previous/current company': 'Big Bazaar',
+      'Have 2wheeler with license': 1,
+    },
+  ];
+
+  const shortlistRows = [
+    {
+      'Candidate Name': 'Demo Priya Kulkarni',
+      'Contact number': phone2,
+      'Shortlist Status': 'SHORTLISTED',
+    },
+  ];
+
+  const dailyCallingRows = [
+    {
+      'Candidate Name': 'Demo Rahul Patil',
+      'Phone Number': phone1,
+      'Call Status': 'Connected',
+      'Remarks': 'Interested in job opening',
+    },
+  ];
+
+  const guideRows = [
+    {
+      'Instruction': 'This is a reference guide sheet and should be ignored during lead commit.',
+    },
+  ];
+
+  XLSX.utils.book_append_sheet(multiSheetWb, XLSX.utils.json_to_sheet(candidateMasterRows), 'CANDIDATE MASTER');
+  XLSX.utils.book_append_sheet(multiSheetWb, XLSX.utils.json_to_sheet(dashboardRows), 'DASHBOARD');
+  XLSX.utils.book_append_sheet(multiSheetWb, XLSX.utils.json_to_sheet(shortlistRows), 'SHORTLISTED CANDIDATES');
+  XLSX.utils.book_append_sheet(multiSheetWb, XLSX.utils.json_to_sheet(dailyCallingRows), 'DAILY CALLING TRACKER');
+  XLSX.utils.book_append_sheet(multiSheetWb, XLSX.utils.json_to_sheet(guideRows), 'IMPORT GUIDE');
+
+  const multiSheetBuffer = XLSX.write(multiSheetWb, { type: 'buffer', bookType: 'xlsx' });
+
+  // 2. Test Preview Generation
+  const previewResult = ImportService.parseWorkbookBuffer(multiSheetBuffer, 'Genius_Consultancy_CRM_Demo_Leads.xlsx');
+  assert(previewResult.totalRows === 3, 'Preview: Correctly parses all 3 Candidate Master rows');
+  assert(previewResult.detectedSheets.length === 5, 'Preview: Accurately detects all 5 workbook sheets');
+  assert(
+    previewResult.detectedSheets.includes('CANDIDATE MASTER') &&
+    previewResult.detectedSheets.includes('DASHBOARD') &&
+    previewResult.detectedSheets.includes('SHORTLISTED CANDIDATES') &&
+    previewResult.detectedSheets.includes('DAILY CALLING TRACKER') &&
+    previewResult.detectedSheets.includes('IMPORT GUIDE'),
+    'Preview: Sheet names match expected structure'
+  );
+
+  // 3. Test Commit Execution
+  const commitRes = await ImportService.commitWorkbook(
+    multiSheetBuffer,
+    'Genius_Consultancy_CRM_Demo_Leads.xlsx',
+    superAdminUser!.id,
+    verifJob.id,
+    company!.id
+  );
+
+  assert(commitRes.importedCount === 3, 'Commit: Successfully imported 3 candidate records');
+  assert(commitRes.duplicateCount === 0, 'Commit: Initial batch has 0 duplicate records');
+  assert(commitRes.batchCode.startsWith('BATCH-'), 'Commit: Generates formatted unique batchCode');
+
+  // Verify created candidates in database
+  const cand1 = await prisma.candidate.findUnique({ where: { normalizedPhone: phone1 } });
+  const cand2 = await prisma.candidate.findUnique({ where: { normalizedPhone: phone2 } });
+  const cand3 = await prisma.candidate.findUnique({ where: { normalizedPhone: phone3 } });
+
+  assert(cand1 !== null && cand1.fullName === 'Demo Rahul Patil', 'Candidate 1 created with Candidate Master details');
+  assert(cand2 !== null && cand2.fullName === 'Demo Priya Kulkarni', 'Candidate 2 created with Candidate Master details');
+  assert(cand3 !== null && cand3.fullName === 'Demo Arjun Shinde', 'Candidate 3 created with Candidate Master details');
+
+  // Verify Dashboard sheet enrichment on Candidate 1 (Have 2wheeler with license = 1)
+  assert(cand1?.hasTwoWheeler === true && cand1.hasDrivingLicense === true, 'Candidate 1 enriched from Dashboard sheet');
+
+  // Verify Shortlisted Candidates sheet reconciliation on Candidate 2 application
+  const app2 = await prisma.application.findFirst({
+    where: { candidateId: cand2!.id, jobId: verifJob.id },
+  });
+  assert(app2 !== null, 'Application for Candidate 2 created');
+  assert(app2?.currentStage === 'SHORTLISTED', 'Candidate 2 application stage set to SHORTLISTED from shortlist sheet');
+  assert(app2?.formStatus === 'RECEIVED', 'Candidate 2 formStatus set to RECEIVED');
+  assert(app2?.cvStatus === 'CV_RECEIVED', 'Candidate 2 cvStatus set to CV_RECEIVED');
+
+  // 4. Test Idempotency (Re-importing the exact same workbook should not create duplicate candidate records)
+  const reCommitRes = await ImportService.commitWorkbook(
+    multiSheetBuffer,
+    'Genius_Consultancy_CRM_Demo_Leads.xlsx',
+    superAdminUser!.id,
+    verifJob.id,
+    company!.id
+  );
+
+  assert(reCommitRes.duplicateCount === 3, 'Idempotent Re-import: Correctly identifies all 3 existing candidates as duplicates');
+  assert(reCommitRes.importedCount === 3, 'Idempotent Re-import: Total processed rows is 3');
+
+  const countAfterReimport = await prisma.candidate.count({
+    where: {
+      normalizedPhone: { in: [phone1, phone2, phone3] },
+    },
+  });
+  assert(countAfterReimport === 3, 'Deduplication: Database candidate count remains exactly 3 without duplicate records');
+
+  // 5. Test Error Handling on Invalid Job Requirement ID
+  let jobErrorCaught = false;
+  try {
+    await ImportService.commitWorkbook(
+      multiSheetBuffer,
+      'Genius_Consultancy_CRM_Demo_Leads.xlsx',
+      superAdminUser!.id,
+      'invalid-nonexistent-job-id',
+      company!.id
+    );
+  } catch (err: any) {
+    if (err.message.includes('not found')) {
+      jobErrorCaught = true;
+    }
+  }
+  assert(jobErrorCaught, 'Validation: Commit throws descriptive error when Job Requirement is missing/invalid');
+
+  // ==========================================
+  // TEST SUITE 20: 20-Candidate Demo Leads Workbook, Demo Target Sheet & Full RBAC Matrix
+  // ==========================================
+  console.log('\n--- Test Suite 20: 20-Candidate Demo Leads Workbook & Full RBAC Matrix ---');
+
+  // 1. Setup Demo Target Company and Job Requirement
+  const demoCompCode = `COMP-DEMO-${Date.now().toString().slice(-4)}`;
+  const demoCompany = await prisma.company.create({
+    data: {
+      companyCode: demoCompCode,
+      companyName: 'DemoTech Solutions Pvt Ltd',
+      industry: 'Information Technology',
+      companyType: 'Corporate',
+      city: 'Kalaburagi',
+      state: 'Karnataka',
+      status: 'ACTIVE',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  const demoJobCode = `JOB-DEMO-${Date.now().toString().slice(-4)}`;
+  const demoJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: demoJobCode,
+      jobTitle: 'Field Sales Executive - Kalaburagi',
+      companyId: demoCompany.id,
+      vacancies: 20,
+      location: 'Kalaburagi, Karnataka',
+      salaryMin: 18000,
+      salaryMax: 26000,
+      experienceMin: 0,
+      experienceMax: 3,
+      twoWheelerRequired: true,
+      drivingLicenseRequired: true,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  assert(demoCompany.id !== undefined, 'Target Company created: DemoTech Solutions Pvt Ltd');
+  assert(demoJob.id !== undefined, 'Target Job Requirement created: Field Sales Executive - Kalaburagi');
+
+  // 2. Construct exactly 20 fictional demo candidates across all 6 sheets
+  const demoLeadWb = XLSX.utils.book_new();
+  const testTime20 = Date.now();
+
+  const demoCandidateNames = [
+    'Demo Rahul Patil', 'Demo Priya Kulkarni', 'Demo Arjun Shinde', 'Demo Sneha Deshmukh',
+    'Demo Vikram Rathod', 'Demo Pooja Joshi', 'Demo Aditya Gaikwad', 'Demo Ananya Hegde',
+    'Demo Rohan Mane', 'Demo Kavita Biradar', 'Demo Suresh Kamble', 'Demo Megha Kulkarni',
+    'Demo Rajesh Pujari', 'Demo Shweta Patil', 'Demo Vinay Nayak', 'Demo Deepa Shetty',
+    'Demo Santosh Jadhav', 'Demo Jyotsna Rao', 'Demo Kiran More', 'Demo Manisha Pawar',
+  ];
+
+  const demoCandidates = demoCandidateNames.map((name, i) => {
+    const numStr = String(testTime20 + i).slice(-8);
+    return {
+      name,
+      phone: `94${numStr}`,
+      email: `demo.candidate.${testTime20}.${i + 1}@demotech.com`,
+      loc: 'Kalaburagi',
+      edu: i % 2 === 0 ? 'B.Com Graduate' : 'B.Sc IT',
+      exp: `${(i % 5) + 1} Years`,
+      assets: i % 2 === 0 ? 'Bike with DL' : 'Two Wheeler',
+    };
+  });
+
+  const candMasterSheet = demoCandidates.map((c) => ({
+    'Candidate Name': c.name,
+    'Phone Number': c.phone,
+    'Email': c.email,
+    'Location': c.loc,
+    'Education': c.edu,
+    'Experience': c.exp,
+    'Current/Latest Job': 'Field Executive',
+    'Assets': c.assets,
+  }));
+
+  const dashSheet = demoCandidates.slice(0, 10).map((c) => ({
+    'Candidate Name': c.name,
+    'Contact number': c.phone,
+    'Location': c.loc,
+    'Years of experience': c.exp,
+    'Previous/current company': 'Prior Enterprise',
+    'Have 2wheeler with license': 1,
+  }));
+
+  const shortlistSheet = demoCandidates.slice(0, 5).map((c) => ({
+    'Candidate Name': c.name,
+    'Contact number': c.phone,
+    'Shortlist Status': 'SHORTLISTED',
+  }));
+
+  const dailySheet = demoCandidates.slice(0, 8).map((c) => ({
+    'Candidate Name': c.name,
+    'Phone Number': c.phone,
+    'Call Status': 'Connected',
+    'Remarks': 'Discussed Kalaburagi opening',
+  }));
+
+  const guideSheet = [{ 'Instruction': 'Demo Import Guidelines' }];
+  const demoTargetSheet = [{
+    'Target Client Company': 'DemoTech Solutions Pvt Ltd',
+    'Target Job Requirement': 'Field Sales Executive - Kalaburagi',
+  }];
+
+  XLSX.utils.book_append_sheet(demoLeadWb, XLSX.utils.json_to_sheet(candMasterSheet), 'CANDIDATE MASTER');
+  XLSX.utils.book_append_sheet(demoLeadWb, XLSX.utils.json_to_sheet(dashSheet), 'DASHBOARD');
+  XLSX.utils.book_append_sheet(demoLeadWb, XLSX.utils.json_to_sheet(shortlistSheet), 'SHORTLISTED CANDIDATES');
+  XLSX.utils.book_append_sheet(demoLeadWb, XLSX.utils.json_to_sheet(dailySheet), 'DAILY CALLING TRACKER');
+  XLSX.utils.book_append_sheet(demoLeadWb, XLSX.utils.json_to_sheet(guideSheet), 'IMPORT GUIDE');
+  XLSX.utils.book_append_sheet(demoLeadWb, XLSX.utils.json_to_sheet(demoTargetSheet), 'DEMO TARGET');
+
+  const demo20Buffer = XLSX.write(demoLeadWb, { type: 'buffer', bookType: 'xlsx' });
+
+  // 3. Preview 20-candidate workbook
+  const demo20Preview = ImportService.parseWorkbookBuffer(demo20Buffer, 'Genius_Consultancy_CRM_Demo_Leads.xlsx');
+  assert(demo20Preview.totalRows === 20, '20-Candidate Demo Preview: Exactly 20 rows parsed from CANDIDATE MASTER');
+  assert(demo20Preview.detectedSheets.length === 6, '20-Candidate Demo Preview: All 6 sheets detected');
+  assert(demo20Preview.detectedSheets.includes('DEMO TARGET'), '20-Candidate Demo Preview: Detects DEMO TARGET sheet');
+
+  // 4. Initial 20-candidate Commit Execution
+  const demo20Commit = await ImportService.commitWorkbook(
+    demo20Buffer,
+    'Genius_Consultancy_CRM_Demo_Leads.xlsx',
+    superAdminUser!.id,
+    demoJob.id,
+    demoCompany.id
+  );
+
+  assert(demo20Commit.importedCount === 20, 'Initial Commit: Successfully imported 20 candidate rows');
+  assert(demo20Commit.duplicateCount === 0, 'Initial Commit: 0 duplicates on clean first import');
+  assert(demo20Commit.skippedCount === 0, 'Initial Commit: 0 skipped rows');
+
+  // 5. Verify PostgreSQL / Database Candidate Count and Association
+  const importedPhoneList = demoCandidates.map((c) => c.phone);
+  const createdCandCount = await prisma.candidate.count({
+    where: { normalizedPhone: { in: importedPhoneList } },
+  });
+  assert(createdCandCount === 20, 'Database Integrity: Exactly 20 distinct Candidate records created in Candidate Master');
+
+  const createdAppCount = await prisma.application.count({
+    where: { jobId: demoJob.id, companyId: demoCompany.id },
+  });
+  assert(createdAppCount === 20, 'Database Integrity: Exactly 20 Application records created and linked to Target Company & Job');
+
+  // 6. Verify Shortlisted Candidates Reconciliation (First 5 candidates)
+  const shortlistedApps = await prisma.application.findMany({
+    where: {
+      jobId: demoJob.id,
+      candidate: { normalizedPhone: { in: demoCandidates.slice(0, 5).map((c) => c.phone) } },
+    },
+  });
+  const allShortlisted = shortlistedApps.every(
+    (app) => app.currentStage === 'SHORTLISTED' && app.formStatus === 'RECEIVED' && app.cvStatus === 'CV_RECEIVED'
+  );
+  assert(allShortlisted, 'Multi-Sheet Reconciliation: Shortlist sheet candidates correctly promoted to SHORTLISTED / RECEIVED');
+
+  // 7. Verify Idempotency (Second Re-Import of exact same 20-candidate workbook)
+  const demo20Recommit = await ImportService.commitWorkbook(
+    demo20Buffer,
+    'Genius_Consultancy_CRM_Demo_Leads.xlsx',
+    superAdminUser!.id,
+    demoJob.id,
+    demoCompany.id
+  );
+
+  assert(demo20Recommit.duplicateCount === 20, 'Idempotent 2nd Import: Identifies all 20 existing candidates as duplicates');
+  assert(demo20Recommit.importedCount === 20, 'Idempotent 2nd Import: Total processed rows is 20');
+
+  const postRecommitCandCount = await prisma.candidate.count({
+    where: { normalizedPhone: { in: importedPhoneList } },
+  });
+  assert(postRecommitCandCount === 20, 'Idempotent 2nd Import: Database Candidate count remains strictly 20 (NO duplicate copies)');
+
+  const postRecommitAppCount = await prisma.application.count({
+    where: { jobId: demoJob.id, companyId: demoCompany.id },
+  });
+  assert(postRecommitAppCount === 20, 'Idempotent 2nd Import: Database Application count remains strictly 20 (NO duplicate applications)');
+
+  // 8. Verify ImportBatch and AuditLog for 20-row demo import
+  const demoBatch = await prisma.importBatch.findUnique({
+    where: { id: demo20Commit.batchId },
+  });
+  assert(demoBatch !== null && demoBatch.status === 'COMMITTED', 'ImportBatch recorded with status COMMITTED');
+  assert(demoBatch?.totalRows === 20 && demoBatch?.importedRows === 20, 'ImportBatch records totalRows=20, importedRows=20');
+
+  const importAudit = await prisma.auditLog.findFirst({
+    where: {
+      entity: 'ImportBatch',
+      entityId: demo20Commit.batchId,
+      action: 'IMPORT_COMMITTED',
+    },
+  });
+  assert(importAudit !== null, 'Immutable AuditLog entry created for ImportBatch commit');
+
+  // 9. Verify Comprehensive RBAC Matrix for Lead Import
+  const { hasPermission: checkRbac } = await import('../src/server/middleware/auth');
+
+  const makeSession = (roleName: string, permissions: string[]) => ({
+    userId: `mock-${roleName.toLowerCase()}-id`,
+    email: `${roleName.toLowerCase()}@geniusconsultancy.com`,
+    fullName: `Mock ${roleName}`,
+    roles: [roleName],
+    permissions,
+  });
+
+  const superAdminSess = makeSession('SUPER_ADMIN', DEFAULT_ROLE_PERMISSIONS.SUPER_ADMIN);
+  const opsHeadSess = makeSession('OPERATIONS_HEAD', DEFAULT_ROLE_PERMISSIONS.OPERATIONS_HEAD);
+  const screeningSess = makeSession('SCREENING_MANAGER', DEFAULT_ROLE_PERMISSIONS.SCREENING_MANAGER);
+  const execSess = makeSession('EXECUTIVE', DEFAULT_ROLE_PERMISSIONS.EXECUTIVE);
+  const tlSess = makeSession('TEAM_LEAD', DEFAULT_ROLE_PERMISSIONS.TEAM_LEAD);
+  const bdmSess = makeSession('BUSINESS_DEVELOPMENT_MANAGER', DEFAULT_ROLE_PERMISSIONS.BUSINESS_DEVELOPMENT_MANAGER);
+  const bdeSess = makeSession('BUSINESS_DEVELOPMENT_EXECUTIVE', DEFAULT_ROLE_PERMISSIONS.BUSINESS_DEVELOPMENT_EXECUTIVE);
+  const finSess = makeSession('FINANCE_MANAGER', DEFAULT_ROLE_PERMISSIONS.FINANCE_MANAGER);
+
+  assert(checkRbac(superAdminSess, 'candidate.import') === true, 'RBAC: SUPER_ADMIN is ALLOWED candidate.import');
+  assert(checkRbac(opsHeadSess, 'candidate.import') === true, 'RBAC: OPERATIONS_HEAD is ALLOWED candidate.import');
+  assert(checkRbac(execSess, 'candidate.import') === false, 'RBAC: EXECUTIVE is DENIED candidate.import');
+  assert(checkRbac(screeningSess, 'candidate.import') === false, 'RBAC: SCREENING_MANAGER is DENIED candidate.import');
+  assert(checkRbac(tlSess, 'candidate.import') === false, 'RBAC: TEAM_LEAD is DENIED candidate.import');
+  assert(checkRbac(bdmSess, 'candidate.import') === false, 'RBAC: BUSINESS_DEVELOPMENT_MANAGER is DENIED candidate.import');
+  assert(checkRbac(bdeSess, 'candidate.import') === false, 'RBAC: BUSINESS_DEVELOPMENT_EXECUTIVE is DENIED candidate.import');
+  assert(checkRbac(finSess, 'candidate.import') === false, 'RBAC: FINANCE_MANAGER is DENIED candidate.import');
 
   // ==========================================
   // TEST SUMMARY
