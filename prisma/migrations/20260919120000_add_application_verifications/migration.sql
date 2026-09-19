@@ -1,4 +1,4 @@
-﻿-- CreateTable
+-- CreateTable
 CREATE TABLE application_verifications (
     id TEXT NOT NULL,
     applicationId TEXT NOT NULL,
