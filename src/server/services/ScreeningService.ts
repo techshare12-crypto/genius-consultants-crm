@@ -144,9 +144,11 @@ export class ScreeningService {
         const app = await tx.application.findUnique({ where: { id: appId } });
         if (!app) continue;
 
-        // Ensure only SCREENING_PASSED or already shortlisted applications can move to FINAL_SHORTLIST
-        if (app.currentStage !== 'SCREENING_PASSED' && app.currentStage !== 'SCREENING_PENDING') {
-          throw new Error(`Application ${app.applicationCode} cannot be finalized. Current stage: ${app.currentStage}`);
+        // Strict State Machine: Only candidates who have explicitly PASSED internal screening can move to FINAL_SHORTLIST
+        if (app.currentStage !== 'SCREENING_PASSED') {
+          throw new Error(
+            `Application ${app.applicationCode || appId} cannot be moved to Final Shortlist. Candidate must be in 'SCREENING_PASSED' stage, but is currently in '${app.currentStage}'.`
+          );
         }
 
         await tx.application.update({

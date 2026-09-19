@@ -144,44 +144,68 @@ export default function ScreeningPage() {
             Verify candidate Google Forms & WhatsApp CVs, submit PASS/FAIL/HOLD, and create Final Shortlists.
           </p>
         </div>
+      </div>
 
-        {/* Tab Selector & Finalize Action */}
-        <div className="flex items-center gap-3">
-          <div className="flex bg-slate-100 p-1 rounded-xl gap-1 text-xs font-semibold">
-            <button
-              onClick={() => setTab('QUEUE')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                tab === 'QUEUE' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
-              }`}
-            >
-              Screening Queue
-            </button>
-            <button
-              onClick={() => setTab('SCREENING_PASSED')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                tab === 'SCREENING_PASSED' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600'
-              }`}
-            >
-              Passed (Eligible)
-            </button>
-            <button
-              onClick={() => setTab('SCREENING_HOLD')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                tab === 'SCREENING_HOLD' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-600'
-              }`}
-            >
-              Hold
-            </button>
-            <button
-              onClick={() => setTab('FINAL_SHORTLIST')}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                tab === 'FINAL_SHORTLIST' ? 'bg-white text-purple-700 shadow-sm' : 'text-slate-600'
-              }`}
-            >
-              Final Shortlist
-            </button>
+      {/* Recruitment Workflow Guide */}
+      <div className="bg-gradient-to-r from-teal-50 via-slate-50 to-purple-50 border border-slate-200 rounded-xl p-4 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-slate-800">Recruitment Funnel:</span>
           </div>
+          <div className="flex items-center gap-1.5 flex-wrap text-[11px] font-medium text-slate-600">
+            <span className="px-2 py-1 bg-white rounded border border-slate-200 text-slate-700">1. Executive Calling</span>
+            <span>➔</span>
+            <span className="px-2 py-1 bg-white rounded border border-slate-200 text-slate-700">2. Form & CV Received</span>
+            <span>➔</span>
+            <span className="px-2 py-1 bg-teal-50 border border-teal-300 text-teal-800 font-bold">3. Screening Queue (PASS/FAIL/HOLD)</span>
+            <span>➔</span>
+            <span className="px-2 py-1 bg-emerald-50 border border-emerald-300 text-emerald-800 font-bold">4. Passed (Eligible)</span>
+            <span>➔</span>
+            <span className="px-2 py-1 bg-purple-50 border border-purple-300 text-purple-800 font-bold">5. Final Shortlist</span>
+            <span>➔</span>
+            <span className="px-2 py-1 bg-slate-900 text-white rounded font-bold">6. Client Submission</span>
+          </div>
+        </div>
+      </div>
 
+      {/* Tab Selector & Finalize Action */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex bg-slate-100 p-1 rounded-xl gap-1 text-xs font-semibold overflow-x-auto">
+          <button
+            onClick={() => setTab('QUEUE')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${
+              tab === 'QUEUE' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Screening Queue
+          </button>
+          <button
+            onClick={() => setTab('SCREENING_PASSED')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${
+              tab === 'SCREENING_PASSED' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Passed (Eligible)
+          </button>
+          <button
+            onClick={() => setTab('SCREENING_HOLD')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${
+              tab === 'SCREENING_HOLD' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Hold
+          </button>
+          <button
+            onClick={() => setTab('FINAL_SHORTLIST')}
+            className={`px-3 py-1.5 rounded-lg transition-all ${
+              tab === 'FINAL_SHORTLIST' ? 'bg-white text-purple-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Final Shortlist
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
           {tab === 'SCREENING_PASSED' && hasPermission('shortlist.finalize') && (
             <button
               disabled={selectedAppIds.length === 0}
@@ -191,6 +215,16 @@ export default function ScreeningPage() {
               <UserCheck className="w-4 h-4" />
               <span>Add to Final Shortlist ({selectedAppIds.length})</span>
             </button>
+          )}
+
+          {tab === 'FINAL_SHORTLIST' && (
+            <a
+              href="/submissions"
+              className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+            >
+              <Send className="w-4 h-4" />
+              <span>Go to Client Submissions ➔</span>
+            </a>
           )}
         </div>
       </div>
@@ -213,18 +247,47 @@ export default function ScreeningPage() {
                   </th>
                 )}
                 <th className="py-3 px-4">Candidate & Contact</th>
-                <th className="py-3 px-4">Target Job Requirement</th>
-                <th className="py-3 px-4">Form & CV Checklist</th>
-                <th className="py-3 px-4">Assets & Criteria</th>
-                <th className="py-3 px-4">Current Stage</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-3 px-4">Job Requirement & Company</th>
+                <th className="py-3 px-4">Target Location</th>
+                {tab === 'FINAL_SHORTLIST' ? (
+                  <>
+                    <th className="py-3 px-4">Screening Evaluation</th>
+                    <th className="py-3 px-4">Shortlisted By & Date</th>
+                    <th className="py-3 px-4 text-right">Client Action</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="py-3 px-4">Form & CV Checklist</th>
+                    <th className="py-3 px-4">Assets & Criteria</th>
+                    <th className="py-3 px-4">Current Stage</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {applications.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
-                    No candidates in this screening queue.
+                  <td colSpan={7} className="py-14 text-center">
+                    <div className="max-w-sm mx-auto space-y-2">
+                      <AlertCircle className="w-8 h-8 text-slate-300 mx-auto" />
+                      <div className="text-sm font-bold text-slate-700">
+                        {tab === 'QUEUE' && 'Screening Queue is currently clear'}
+                        {tab === 'SCREENING_PASSED' && 'No candidates have passed screening yet'}
+                        {tab === 'SCREENING_HOLD' && 'No candidates on screening hold'}
+                        {tab === 'FINAL_SHORTLIST' && 'No candidates in the final shortlist yet'}
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        {tab === 'QUEUE' &&
+                          'When calling executives mark leads as Shortlisted and verify Form/CV data, candidates will appear here for internal screening evaluation.'}
+                        {tab === 'SCREENING_PASSED' &&
+                          'Evaluate candidates from the Screening Queue and record a "PASS" decision to make them eligible for the Final Shortlist.'}
+                        {tab === 'SCREENING_HOLD' &&
+                          'Candidates placed on hold pending verification or document resubmission will appear here.'}
+                        {tab === 'FINAL_SHORTLIST' &&
+                          'Go to the "Passed (Eligible)" tab, select approved candidates, and click "Add to Final Shortlist" to prepare them for client dispatch.'}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -246,76 +309,119 @@ export default function ScreeningPage() {
                     <td className="py-3 px-4">
                       <div className="font-bold text-slate-900">{app.candidate?.fullName}</div>
                       <div className="font-mono text-[11px] text-teal-700">{app.candidate?.normalizedPhone}</div>
-                      <div className="text-[10px] text-slate-400">{app.candidate?.currentLocation}</div>
+                      <div className="text-[10px] text-slate-400">Residence: {app.candidate?.currentLocation || 'N/A'}</div>
                     </td>
                     <td className="py-3 px-4">
                       <div className="font-semibold text-slate-800">{app.job?.jobTitle}</div>
-                      <div className="text-[11px] text-slate-500">{app.job?.company?.companyName}</div>
+                      <div className="text-[11px] text-slate-500 font-medium">{app.job?.company?.companyName}</div>
+                      <div className="text-[10px] text-slate-400">Job Code: {app.job?.jobCode}</div>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500 font-medium">Form:</span>
-                          <button
-                            onClick={() =>
-                              handleUpdateDocStatus(
-                                app.id,
-                                app.formStatus === 'RECEIVED' ? 'PENDING' : 'RECEIVED',
-                                app.cvStatus
-                              )
-                            }
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
-                              app.formStatus === 'RECEIVED'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-slate-100 text-slate-500 border-slate-200'
-                            }`}
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                        📍 {app.targetLocation || app.job?.location || 'Not Specified'}
+                      </span>
+                    </td>
+
+                    {tab === 'FINAL_SHORTLIST' ? (
+                      <>
+                        <td className="py-3 px-4">
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              PASS (Screening Approved)
+                            </span>
+                            {app.screenings?.[0]?.remarks && (
+                              <p className="text-[11px] text-slate-600 max-w-xs italic line-clamp-2">
+                                &quot;{app.screenings[0].remarks}&quot;
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium text-slate-800">
+                            {app.finalShortlistedBy?.fullName || 'Screening Manager'}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {app.finalShortlistedAt ? new Date(app.finalShortlistedAt).toLocaleDateString() : 'Recent'}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <a
+                            href={`/submissions?companyId=${app.job?.companyId || ''}&jobId=${app.jobId}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
                           >
-                            {app.formStatus === 'RECEIVED' ? '✅ Form Received' : '⏳ Form Pending'}
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500 font-medium">CV:</span>
-                          <button
-                            onClick={() =>
-                              handleUpdateDocStatus(
-                                app.id,
-                                app.formStatus,
-                                app.cvStatus === 'CV_RECEIVED' ? 'CV_REQUIRED' : 'CV_RECEIVED'
-                              )
-                            }
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
-                              app.cvStatus === 'CV_RECEIVED' || app.cvStatus === 'VERIFIED'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-slate-100 text-slate-500 border-slate-200'
-                            }`}
-                          >
-                            {app.cvStatus === 'CV_RECEIVED' || app.cvStatus === 'VERIFIED'
-                              ? '✅ CV Received'
-                              : '⏳ CV Pending'}
-                          </button>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="text-[11px] text-slate-700 space-y-0.5">
-                        <div>Bike: {app.candidate?.hasTwoWheeler ? '✅ Yes' : '❌ No'}</div>
-                        <div>DL: {app.candidate?.hasDrivingLicense ? '✅ Yes' : '❌ No'}</div>
-                        <div>Exp: {app.candidate?.experienceYears} Yrs</div>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <StageBadge stage={app.currentStage} />
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      {hasPermission('screening.evaluate') && (
-                        <button
-                          onClick={() => setEvalApp(app)}
-                          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
-                        >
-                          Evaluate Decision
-                        </button>
-                      )}
-                    </td>
+                            <Send className="w-3.5 h-3.5" />
+                            <span>Create Client Submission</span>
+                          </a>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="py-3 px-4">
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-slate-500 font-medium">Form:</span>
+                              <button
+                                onClick={() =>
+                                  handleUpdateDocStatus(
+                                    app.id,
+                                    app.formStatus === 'RECEIVED' ? 'PENDING' : 'RECEIVED',
+                                    app.cvStatus
+                                  )
+                                }
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                                  app.formStatus === 'RECEIVED'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                                }`}
+                              >
+                                {app.formStatus === 'RECEIVED' ? '✅ Form Received' : '⏳ Form Pending'}
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-slate-500 font-medium">CV:</span>
+                              <button
+                                onClick={() =>
+                                  handleUpdateDocStatus(
+                                    app.id,
+                                    app.formStatus,
+                                    app.cvStatus === 'CV_RECEIVED' ? 'CV_REQUIRED' : 'CV_RECEIVED'
+                                  )
+                                }
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                                  app.cvStatus === 'CV_RECEIVED' || app.cvStatus === 'VERIFIED'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                                }`}
+                              >
+                                {app.cvStatus === 'CV_RECEIVED' || app.cvStatus === 'VERIFIED'
+                                  ? '✅ CV Received'
+                                  : '⏳ CV Pending'}
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="text-[11px] text-slate-700 space-y-0.5">
+                            <div>Bike: {app.candidate?.hasTwoWheeler ? '✅ Yes' : '❌ No'}</div>
+                            <div>DL: {app.candidate?.hasDrivingLicense ? '✅ Yes' : '❌ No'}</div>
+                            <div>Exp: {app.candidate?.experienceYears} Yrs</div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <StageBadge stage={app.currentStage} />
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          {hasPermission('screening.evaluate') && (
+                            <button
+                              onClick={() => setEvalApp(app)}
+                              className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
+                            >
+                              Evaluate Decision
+                            </button>
+                          )}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))
               )}

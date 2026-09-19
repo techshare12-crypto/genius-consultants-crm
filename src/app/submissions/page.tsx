@@ -63,6 +63,15 @@ export default function ClientSubmissionsPage() {
 
   useEffect(() => {
     fetchData();
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const cId = params.get('companyId');
+      const jId = params.get('jobId');
+      if (cId) setSubCompanyId(cId);
+      if (jId) setSubJobId(jId);
+      if (cId || jId) setShowNewSubModal(true);
+    }
   }, []);
 
   const fetchData = async () => {
@@ -207,7 +216,23 @@ export default function ClientSubmissionsPage() {
     }
   };
 
-  const eligibleForSubmission = finalShortlistApps.filter((a) => a.currentStage === 'FINAL_SHORTLIST');
+  const eligibleForSubmission = finalShortlistApps.filter(
+    (a) =>
+      a.currentStage === 'FINAL_SHORTLIST' &&
+      (!subJobId || a.jobId === subJobId) &&
+      (!subCompanyId || a.job?.companyId === subCompanyId || a.companyId === subCompanyId)
+  );
+
+  const handleCompanyChange = (cId: string) => {
+    setSubCompanyId(cId);
+    setSubJobId('');
+    setSelectedAppIds([]);
+  };
+
+  const handleJobChange = (jId: string) => {
+    setSubJobId(jId);
+    setSelectedAppIds([]);
+  };
 
   return (
     <div className="space-y-6">
@@ -416,7 +441,7 @@ export default function ClientSubmissionsPage() {
             <label className="block text-xs font-semibold text-slate-700 mb-1">Target Client Company</label>
             <select
               value={subCompanyId}
-              onChange={(e) => setSubCompanyId(e.target.value)}
+              onChange={(e) => handleCompanyChange(e.target.value)}
               className="w-full p-2 border border-slate-200 rounded-lg text-xs"
             >
               <option value="">Select Company...</option>
@@ -432,7 +457,7 @@ export default function ClientSubmissionsPage() {
             <label className="block text-xs font-semibold text-slate-700 mb-1">Job Opening</label>
             <select
               value={subJobId}
-              onChange={(e) => setSubJobId(e.target.value)}
+              onChange={(e) => handleJobChange(e.target.value)}
               className="w-full p-2 border border-slate-200 rounded-lg text-xs"
             >
               <option value="">Select Job Opening...</option>
@@ -447,15 +472,36 @@ export default function ClientSubmissionsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Select Final Shortlisted Candidates ({eligibleForSubmission.length} available)
-            </label>
-            <div className="max-h-40 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 p-2 text-xs">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold text-slate-700">
+                Select Final Shortlisted Candidates ({eligibleForSubmission.length} available)
+              </label>
+              {eligibleForSubmission.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedAppIds(
+                      selectedAppIds.length === eligibleForSubmission.length
+                        ? []
+                        : eligibleForSubmission.map((a) => a.id)
+                    )
+                  }
+                  className="text-[11px] text-teal-600 hover:text-teal-700 font-semibold"
+                >
+                  {selectedAppIds.length === eligibleForSubmission.length ? 'Deselect All' : 'Select All'}
+                </button>
+              )}
+            </div>
+            <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 p-2 text-xs bg-slate-50/50">
               {eligibleForSubmission.length === 0 ? (
-                <div className="text-slate-400 p-2">No candidates in FINAL_SHORTLIST stage.</div>
+                <div className="text-slate-400 p-3 text-center">
+                  {!subJobId
+                    ? 'Please select a company and job opening above.'
+                    : 'No candidates currently in FINAL_SHORTLIST stage for this job opening. Please approve candidates from Screening Center.'}
+                </div>
               ) : (
                 eligibleForSubmission.map((app) => (
-                  <label key={app.id} className="flex items-center gap-2 p-1.5 hover:bg-slate-50 cursor-pointer">
+                  <label key={app.id} className="flex items-start gap-2.5 p-2 hover:bg-white rounded transition-colors cursor-pointer">
                     <input
                       type="checkbox"
                       checked={selectedAppIds.includes(app.id)}
@@ -464,9 +510,19 @@ export default function ClientSubmissionsPage() {
                           e.target.checked ? [...prev, app.id] : prev.filter((i) => i !== app.id)
                         )
                       }
+                      className="mt-0.5"
                     />
-                    <span className="font-bold text-slate-900">{app.candidate?.fullName}</span>
-                    <span className="text-slate-400">({app.job?.jobTitle})</span>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">{app.candidate?.fullName}</span>
+                        <span className="text-[11px] font-mono text-teal-700">{app.candidate?.normalizedPhone}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                        <span>📍 Target: <strong className="text-slate-700">{app.targetLocation || app.job?.location || 'General'}</strong></span>
+                        <span>•</span>
+                        <span>Res: {app.candidate?.currentLocation || 'N/A'}</span>
+                      </div>
+                    </div>
                   </label>
                 ))
               )}

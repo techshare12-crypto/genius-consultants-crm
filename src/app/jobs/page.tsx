@@ -81,11 +81,18 @@ export default function JobRequirementsPage() {
     setSubmitting(true);
 
     try {
+      const locList = newJob.location
+        .split(',')
+        .map((l) => l.trim())
+        .filter(Boolean);
+
       const res = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...newJob,
+          location: locList.join(', '),
+          locations: locList.map((city) => ({ city, vacancies: 1 })),
           vacancies: Number(newJob.vacancies),
           salaryMin: Number(newJob.salaryMin),
           salaryMax: Number(newJob.salaryMax),
@@ -152,12 +159,27 @@ export default function JobRequirementsPage() {
               </div>
 
               <div className="mt-4 pt-4 border-t border-slate-100 space-y-2 text-xs">
-                <div className="flex items-center justify-between text-slate-600">
-                  <span className="text-slate-400 flex items-center gap-1">
+                <div className="flex items-start justify-between text-slate-600 gap-2">
+                  <span className="text-slate-400 flex items-center gap-1 shrink-0 mt-0.5">
                     <MapPin className="w-3.5 h-3.5" />
-                    Location:
+                    Locations:
                   </span>
-                  <span className="font-semibold text-slate-800">{job.location}</span>
+                  <div className="text-right">
+                    {job.locations && job.locations.length > 0 ? (
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {job.locations.map((loc: any) => (
+                          <span
+                            key={loc.id}
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200"
+                          >
+                            {loc.city} {loc.vacancies > 1 ? `(${loc.vacancies})` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="font-semibold text-slate-800">{job.location}</span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between text-slate-600">

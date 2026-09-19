@@ -16,11 +16,12 @@ export async function GET(req: NextRequest) {
   if (companyId) where.companyId = companyId;
   if (status) where.jobStatus = status;
 
-  const jobs = await prisma.jobRequirement.findMany({
+    const jobs = await prisma.jobRequirement.findMany({
     where,
     include: {
       company: { select: { id: true, companyName: true, companyCode: true, city: true } },
       createdBy: { select: { id: true, fullName: true } },
+      locations: true,
       _count: {
         select: {
           applications: true,
@@ -53,6 +54,17 @@ export async function POST(req: NextRequest) {
     const totalJobs = await prisma.jobRequirement.count();
     const jobCode = `JOB-${String(totalJobs + 1).padStart(4, '0')}`;
 
+    // Normalize locations
+    let locationRecords: { city: string; state?: string | null; vacancies: number }[] = [];
+    if (data.locations && Array.isArray(data.locations) && data.locations.length > 0) {
+      locationRecords = data.locations.map((loc) => {
+        if (typeof loc === 'string') {
+          return { city: loc.trim(), state: null, vacancies: 1 };
+        }
+        return { city: loc.city.trim(), state: loc.state || null, vacancies: loc.vacancies || 1 };
+      });
+    }
+
     const job = await prisma.$transaction(async (tx) => {
       const created = await tx.jobRequirement.create({
         data: {
@@ -77,8 +89,15 @@ export async function POST(req: NextRequest) {
           noticePeriod: data.noticePeriod || null,
           jobStatus: data.jobStatus as any,
           createdById: session.userId,
+          ...(locationRecords.length > 0
+            ? {
+                locations: {
+                  create: locationRecords,
+                },
+              }
+            : {}),
         },
-        include: { company: true },
+        include: { company: true, locations: true },
       });
 
       await AuditService.log(
@@ -87,7 +106,7 @@ export async function POST(req: NextRequest) {
           action: 'JOB_CREATED',
           entity: 'JobRequirement',
           entityId: created.id,
-          newValues: { jobCode, jobTitle: data.jobTitle, companyId: data.companyId },
+          newValues: { jobCode, jobTitle: data.jobTitle, companyId: data.companyId, locations: locationRecords },
         },
         tx
       );

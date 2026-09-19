@@ -13,6 +13,7 @@ import {
   Building2,
   Briefcase,
   Users,
+  MapPin,
 } from 'lucide-react';
 
 export default function ImportLeadsPage() {
@@ -22,6 +23,7 @@ export default function ImportLeadsPage() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [targetCompanyId, setTargetCompanyId] = useState('');
   const [targetJobId, setTargetJobId] = useState('');
+  const [targetLocation, setTargetLocation] = useState('');
 
   // Preview & Processing State
   const [previewData, setPreviewData] = useState<any | null>(null);
@@ -88,6 +90,7 @@ export default function ImportLeadsPage() {
     } else {
       setTargetJobId('');
     }
+    setTargetLocation('');
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -148,6 +151,9 @@ export default function ImportLeadsPage() {
       formData.append('file', file);
       formData.append('companyId', targetCompanyId);
       formData.append('jobId', targetJobId);
+      if (targetLocation) {
+        formData.append('targetLocation', targetLocation);
+      }
 
       const res = await fetch('/api/imports/commit', {
         method: 'POST',
@@ -277,6 +283,7 @@ export default function ImportLeadsPage() {
                   value={targetJobId}
                   onChange={(e) => {
                     setTargetJobId(e.target.value);
+                    setTargetLocation('');
                     setError(null);
                   }}
                   className="w-full p-2.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none bg-white font-medium text-slate-800"
@@ -290,6 +297,44 @@ export default function ImportLeadsPage() {
                 </select>
               )}
             </div>
+
+            {(() => {
+              const selectedJobObj = jobs.find((j) => j.id === targetJobId);
+              const selectedJobLocations: string[] = [];
+              if (selectedJobObj) {
+                if (selectedJobObj.locations && selectedJobObj.locations.length > 0) {
+                  selectedJobLocations.push(...selectedJobObj.locations.map((l: any) => l.city));
+                } else if (selectedJobObj.location) {
+                  selectedJobObj.location.split(',').forEach((s: string) => {
+                    const trimmed = s.trim();
+                    if (trimmed && !selectedJobLocations.includes(trimmed)) selectedJobLocations.push(trimmed);
+                  });
+                }
+              }
+              if (selectedJobLocations.length > 1) {
+                return (
+                  <div className="md:col-span-2 bg-slate-50 border border-teal-200 rounded-lg p-3">
+                    <label className="block text-xs font-semibold text-teal-900 mb-1 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Target Job Opening Location (Multi-Location Opening)</span>
+                    </label>
+                    <select
+                      value={targetLocation}
+                      onChange={(e) => setTargetLocation(e.target.value)}
+                      className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none bg-white font-medium text-slate-800"
+                    >
+                      <option value="">-- Auto-detect from Excel per Candidate / Support All Locations --</option>
+                      {selectedJobLocations.map((loc) => (
+                        <option key={loc} value={loc}>
+                          🎯 Specific Target Location: {loc}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
         )}
       </div>
@@ -383,8 +428,9 @@ export default function ImportLeadsPage() {
                 <tr>
                   <th className="py-2.5 px-3">Candidate Name</th>
                   <th className="py-2.5 px-3">Raw Phone (Excel)</th>
-                  <th className="py-2.5 px-3">Normalized Canonical Phone</th>
-                  <th className="py-2.5 px-3">Location</th>
+                  <th className="py-2.5 px-3">Normalized Phone</th>
+                  <th className="py-2.5 px-3">Candidate Residence</th>
+                  <th className="py-2.5 px-3">Target Applied Location</th>
                   <th className="py-2.5 px-3">Experience</th>
                   <th className="py-2.5 px-3">Assets</th>
                 </tr>
@@ -396,6 +442,7 @@ export default function ImportLeadsPage() {
                     <td className="py-2.5 px-3 font-mono text-slate-500">{r.rawPhone}</td>
                     <td className="py-2.5 px-3 font-mono font-bold text-teal-700">{r.normalizedPhone}</td>
                     <td className="py-2.5 px-3 text-slate-700">{r.location || '-'}</td>
+                    <td className="py-2.5 px-3 text-slate-700 font-medium text-teal-800">{r.appliedLocation || r.location || '-'}</td>
                     <td className="py-2.5 px-3 text-slate-700">{r.experience || '-'}</td>
                     <td className="py-2.5 px-3 text-slate-700">{r.assets || '-'}</td>
                   </tr>

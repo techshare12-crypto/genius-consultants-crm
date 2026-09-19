@@ -1566,6 +1566,475 @@ async function runTestSuite() {
   assert(checkRbac(finSess, 'candidate.import') === false, 'RBAC: FINANCE_MANAGER is DENIED candidate.import');
 
   // ==========================================
+  // TEST SUITE 21: MULTI-LOCATION RECRUITMENT OPERATIONS
+  // ==========================================
+  console.log('\n--- Test Suite 21: Multi-Location Recruitment Operations ---');
+
+  // 1. Create a client company with HQ in Mumbai
+  const multiLocCompany = await prisma.company.create({
+    data: {
+      companyCode: `COMP-ML-${Date.now().toString().slice(-4)}`,
+      companyName: 'ABC Enterprises Pvt Ltd',
+      industry: 'Retail & Distribution',
+      companyType: 'Corporate',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      address: 'Nariman Point, Mumbai',
+      status: 'ACTIVE',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  // 2. Create a Job Requirement with multiple recruitment locations: Kalaburagi, Bengaluru, Hyderabad, Pune
+  const multiLocJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-ML-${Date.now().toString().slice(-4)}`,
+      jobTitle: 'Sales Executive',
+      companyId: multiLocCompany.id,
+      vacancies: 27,
+      location: 'Kalaburagi, Bengaluru, Hyderabad, Pune',
+      salaryMin: 20000,
+      salaryMax: 30000,
+      salaryText: '20,000 - 30,000 + Incentives',
+      twoWheelerRequired: true,
+      drivingLicenseRequired: true,
+      createdById: superAdminUser!.id,
+      locations: {
+        create: [
+          { city: 'Kalaburagi', state: 'Karnataka', vacancies: 5 },
+          { city: 'Bengaluru', state: 'Karnataka', vacancies: 10 },
+          { city: 'Hyderabad', state: 'Telangana', vacancies: 8 },
+          { city: 'Pune', state: 'Maharashtra', vacancies: 4 },
+        ],
+      },
+    },
+    include: { locations: true, company: true },
+  });
+
+  assert(multiLocJob.locations.length === 4, 'Multi-Location Job: Created with 4 distinct recruitment locations');
+  const locCities = multiLocJob.locations.map((l) => l.city).sort();
+  assert(
+    JSON.stringify(locCities) === JSON.stringify(['Bengaluru', 'Hyderabad', 'Kalaburagi', 'Pune']),
+    'Multi-Location Job: Locations correctly contain Bengaluru, Hyderabad, Kalaburagi, Pune'
+  );
+
+  // 3. Entity Separation: Company HQ vs Candidate Residence vs Job Locations vs Application Target Location
+  const uniquePatilPhone = `93${Date.now().toString().slice(-8)}`;
+  const candidateBidar = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-ML-${Date.now().toString().slice(-5)}-1`,
+      fullName: 'Siddharth Patil',
+      rawPhone: uniquePatilPhone,
+      normalizedPhone: uniquePatilPhone,
+      currentLocation: 'Bidar',
+      permanentLocation: 'Bidar',
+      source: 'MANUAL_ENTRY',
+    },
+  });
+
+  const appKalaburagi = await prisma.application.create({
+    data: {
+      applicationCode: `APP-ML-${Date.now().toString().slice(-5)}-1`,
+      candidateId: candidateBidar.id,
+      jobId: multiLocJob.id,
+      companyId: multiLocCompany.id,
+      targetLocation: 'Kalaburagi',
+      currentStage: 'NEW',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  assert(multiLocCompany.city === 'Mumbai', 'Entity Separation: Company HQ remains Mumbai');
+  assert(candidateBidar.currentLocation === 'Bidar', 'Entity Separation: Candidate residence remains Bidar');
+  assert(appKalaburagi.targetLocation === 'Kalaburagi', 'Entity Separation: Application target location is Kalaburagi');
+
+  // 4. Multi-Location Excel Lead Import Reconciliation
+  const mlImportWb = XLSX.utils.book_new();
+  const testTimeML = Date.now();
+  const mlCandidates = [
+    {
+      name: 'ML Candidate 1 (Bidar to Kalaburagi)',
+      phone: `95${String(testTimeML + 1).slice(-8)}`,
+      residence: 'Bidar',
+      appliedLoc: 'Kalaburagi',
+    },
+    {
+      name: 'ML Candidate 2 (Mysuru to Bengaluru)',
+      phone: `95${String(testTimeML + 2).slice(-8)}`,
+      residence: 'Mysuru',
+      appliedLoc: 'Bengaluru',
+    },
+    {
+      name: 'ML Candidate 3 (Secunderabad to Hyderabad)',
+      phone: `95${String(testTimeML + 3).slice(-8)}`,
+      residence: 'Secunderabad',
+      appliedLoc: 'Hyderabad',
+    },
+    {
+      name: 'ML Candidate 4 (Pimpri to Pune)',
+      phone: `95${String(testTimeML + 4).slice(-8)}`,
+      residence: 'Pimpri',
+      appliedLoc: 'Pune',
+    },
+  ];
+
+  const mlCandMasterSheet = mlCandidates.map((c) => ({
+    'Candidate Name': c.name,
+    'Phone Number': c.phone,
+    'Current location': c.residence,
+    'Applied Location': c.appliedLoc,
+    'Education': 'B.Com',
+    'Experience': '2 Years',
+    'Assets': 'Bike with DL',
+  }));
+
+  XLSX.utils.book_append_sheet(mlImportWb, XLSX.utils.json_to_sheet(mlCandMasterSheet), 'CANDIDATE MASTER');
+  const mlBuffer = XLSX.write(mlImportWb, { type: 'buffer', bookType: 'xlsx' });
+
+  const mlPreview = ImportService.parseWorkbookBuffer(mlBuffer, 'Multi_Location_Leads.xlsx');
+  assert(mlPreview.totalRows === 4, 'Multi-Location Import Preview: Correctly parsed 4 rows');
+  assert(
+    mlPreview.previewRows[0].location === 'Bidar' && mlPreview.previewRows[0].appliedLocation === 'Kalaburagi',
+    'Multi-Location Import Preview: Accurately separates Candidate Residence (Bidar) and Applied Location (Kalaburagi)'
+  );
+
+  const mlCommit = await ImportService.commitWorkbook(
+    mlBuffer,
+    'Multi_Location_Leads.xlsx',
+    superAdminUser!.id,
+    multiLocJob.id,
+    multiLocCompany.id
+  );
+  assert(mlCommit.importedCount === 4, 'Multi-Location Import Commit: Successfully imported 4 candidates');
+
+  // Verify created candidates and applications maintain residence vs targetLocation
+  const mlImportedApps = await prisma.application.findMany({
+    where: { jobId: multiLocJob.id, candidate: { normalizedPhone: { in: mlCandidates.map((c) => c.phone) } } },
+    include: { candidate: true },
+  });
+  assert(mlImportedApps.length === 4, 'Multi-Location Import: 4 Applications created for target job');
+
+  const mlApp1 = mlImportedApps.find((a) => a.candidate.normalizedPhone === mlCandidates[0].phone);
+  assert(
+    mlApp1?.candidate.currentLocation === 'Bidar' && mlApp1?.targetLocation === 'Kalaburagi',
+    'Multi-Location Import: Candidate 1 has residence Bidar and application targetLocation Kalaburagi'
+  );
+
+  const mlApp2 = mlImportedApps.find((a) => a.candidate.normalizedPhone === mlCandidates[1].phone);
+  assert(
+    mlApp2?.candidate.currentLocation === 'Mysuru' && mlApp2?.targetLocation === 'Bengaluru',
+    'Multi-Location Import: Candidate 2 has residence Mysuru and application targetLocation Bengaluru'
+  );
+
+  const mlApp3 = mlImportedApps.find((a) => a.candidate.normalizedPhone === mlCandidates[2].phone);
+  assert(
+    mlApp3?.candidate.currentLocation === 'Secunderabad' && mlApp3?.targetLocation === 'Hyderabad',
+    'Multi-Location Import: Candidate 3 has residence Secunderabad and application targetLocation Hyderabad'
+  );
+
+  // 5. Verification & Qualification Engine Multi-Location Evaluation
+  const verifBangalore = VerificationService.evaluateQualification(
+    { currentLocation: 'Bengaluru', appliedLocation: 'Bengaluru', age: 24, hasTwoWheeler: true, hasDrivingLicense: true },
+    {
+      location: multiLocJob.location,
+      locations: multiLocJob.locations,
+      twoWheelerRequired: true,
+      drivingLicenseRequired: true,
+    }
+  );
+  const locCriterion1 = verifBangalore.rules.find((c) => c.key === 'location');
+  assert(locCriterion1?.status === 'MATCH', 'Qualification: Candidate in Bengaluru matches multi-location opening');
+
+  const verifBidarToKalaburagi = VerificationService.evaluateQualification(
+    { currentLocation: 'Bidar', appliedLocation: 'Kalaburagi', age: 24, hasTwoWheeler: true, hasDrivingLicense: true },
+    {
+      location: multiLocJob.location,
+      locations: multiLocJob.locations,
+      twoWheelerRequired: true,
+      drivingLicenseRequired: true,
+    }
+  );
+  const locCriterion2 = verifBidarToKalaburagi.rules.find((c) => c.key === 'location');
+  assert(
+    locCriterion2?.status === 'MATCH',
+    'Qualification: Candidate in Bidar applying for Kalaburagi matches opening'
+  );
+
+  const verifDelhiMismatch = VerificationService.evaluateQualification(
+    { currentLocation: 'Delhi', appliedLocation: 'Delhi', age: 24, hasTwoWheeler: true, hasDrivingLicense: true },
+    {
+      location: multiLocJob.location,
+      locations: multiLocJob.locations,
+      twoWheelerRequired: true,
+      drivingLicenseRequired: true,
+    }
+  );
+  const locCriterion3 = verifDelhiMismatch.rules.find((c) => c.key === 'location');
+  assert(
+    locCriterion3?.status === 'REVIEW',
+    'Qualification: Candidate in Delhi triggers REVIEW for multi-location mandate'
+  );
+
+  // 6. Location-Wise Calling & Performance Tracker Reporting
+  const locTracker = await ReportService.getLocationWiseCallingTracker();
+  assert(Array.isArray(locTracker) && locTracker.length > 0, 'ReportService: Location-wise tracker returns grouped records');
+  const kalaburagiGroup = locTracker.find((l) => l.location.toLowerCase().includes('kalaburagi'));
+  assert(kalaburagiGroup !== undefined && kalaburagiGroup.totalLeads >= 1, 'ReportService: Aggregates leads under Kalaburagi target location');
+
+  // ==========================================
+  // SUITE 22: SCREENING → FINAL SHORTLIST → CLIENT SUBMISSION WORKFLOW & RBAC AUDIT
+  // ==========================================
+  console.log('\n--- Test Suite 22: Screening to Final Shortlist to Client Submission Workflow & RBAC Audit ---');
+
+  const smCompany = await prisma.company.create({
+    data: {
+      companyCode: `COM-WF-${Date.now().toString().slice(-6)}`,
+      companyName: 'Apex Logistics Pvt Ltd',
+      industry: 'Logistics & Supply Chain',
+      city: 'Pune',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  const smJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-WF-${Date.now().toString().slice(-6)}`,
+      jobTitle: 'Field Operations Executive',
+      companyId: smCompany.id,
+      createdById: superAdminUser!.id,
+      location: 'Pune, Maharashtra',
+      vacancies: 3,
+    },
+  });
+
+  const smUser = await prisma.user.findFirst({ where: { email: 'jyoti@geniusconsultancy.com' } });
+  assert(smUser !== null, 'Screening Manager test user exists (Jyoti)');
+
+  // 1. Setup 3 Candidates for Screening Evaluation (PASS, FAIL, HOLD)
+  const phoneTime = Date.now();
+  const candPass = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-WF-P-${phoneTime.toString().slice(-5)}`,
+      fullName: 'Vikram Joshi (Pass)',
+      rawPhone: `91${String(phoneTime + 11).slice(-8)}`,
+      normalizedPhone: `91${String(phoneTime + 11).slice(-8)}`,
+      currentLocation: 'Pune',
+      source: 'MANUAL_ENTRY',
+    },
+  });
+
+  const candFail = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-WF-F-${phoneTime.toString().slice(-5)}`,
+      fullName: 'Ramesh Patil (Fail)',
+      rawPhone: `91${String(phoneTime + 12).slice(-8)}`,
+      normalizedPhone: `91${String(phoneTime + 12).slice(-8)}`,
+      currentLocation: 'Pune',
+      source: 'MANUAL_ENTRY',
+    },
+  });
+
+  const candHold = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-WF-H-${phoneTime.toString().slice(-5)}`,
+      fullName: 'Suresh More (Hold)',
+      rawPhone: `91${String(phoneTime + 13).slice(-8)}`,
+      normalizedPhone: `91${String(phoneTime + 13).slice(-8)}`,
+      currentLocation: 'Pune',
+      source: 'MANUAL_ENTRY',
+    },
+  });
+
+  const appPass = await prisma.application.create({
+    data: {
+      applicationCode: `APP-WF-P-${phoneTime.toString().slice(-5)}`,
+      candidateId: candPass.id,
+      jobId: smJob.id,
+      companyId: smCompany.id,
+      targetLocation: 'Pune',
+      currentStage: 'SHORTLISTED',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  const appFail = await prisma.application.create({
+    data: {
+      applicationCode: `APP-WF-F-${phoneTime.toString().slice(-5)}`,
+      candidateId: candFail.id,
+      jobId: smJob.id,
+      companyId: smCompany.id,
+      targetLocation: 'Pune',
+      currentStage: 'SHORTLISTED',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  const appHold = await prisma.application.create({
+    data: {
+      applicationCode: `APP-WF-H-${phoneTime.toString().slice(-5)}`,
+      candidateId: candHold.id,
+      jobId: smJob.id,
+      companyId: smCompany.id,
+      targetLocation: 'Pune',
+      currentStage: 'SHORTLISTED',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  // 2. Document tracking transition -> SCREENING_PENDING
+  await ScreeningService.updateDocumentStatus(appPass.id, smUser!.id, { formStatus: 'RECEIVED', cvStatus: 'CV_RECEIVED' });
+  await ScreeningService.updateDocumentStatus(appFail.id, smUser!.id, { formStatus: 'RECEIVED', cvStatus: 'CV_RECEIVED' });
+  await ScreeningService.updateDocumentStatus(appHold.id, smUser!.id, { formStatus: 'RECEIVED', cvStatus: 'CV_RECEIVED' });
+
+  const appPassPending = await prisma.application.findUnique({ where: { id: appPass.id } });
+  assert(appPassPending?.currentStage === 'SCREENING_PENDING', 'Document receipt transitions stage to SCREENING_PENDING');
+
+  // 3. Screening Evaluation: PASS, FAIL, HOLD
+  const resPass = await ScreeningService.evaluateScreening({
+    applicationId: appPass.id,
+    screenerId: smUser!.id,
+    screeningStatus: 'PASS',
+    remarks: 'Verified bike, DL, and relevant logistics experience. Approved for client.',
+  });
+  assert(resPass.application.currentStage === 'SCREENING_PASSED', 'Screening PASS advances stage to SCREENING_PASSED');
+  assert(resPass.screening.screeningStatus === 'PASS', 'Screening record created with PASS status');
+
+  const resFail = await ScreeningService.evaluateScreening({
+    applicationId: appFail.id,
+    screenerId: smUser!.id,
+    screeningStatus: 'FAIL',
+    remarks: 'Does not meet communication criteria and has no two-wheeler.',
+  });
+  assert(resFail.application.currentStage === 'SCREENING_FAILED', 'Screening FAIL advances stage to SCREENING_FAILED');
+
+  const holdDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const resHold = await ScreeningService.evaluateScreening({
+    applicationId: appHold.id,
+    screenerId: smUser!.id,
+    screeningStatus: 'HOLD',
+    holdFollowupDate: holdDate,
+    remarks: 'Awaiting updated driving license renewal copy.',
+  });
+  assert(resHold.application.currentStage === 'SCREENING_HOLD', 'Screening HOLD advances stage to SCREENING_HOLD');
+  assert(resHold.screening.holdFollowupDate !== null, 'Screening HOLD stores followup date');
+
+  // 4. State Machine Guards: Only SCREENING_PASSED can move to FINAL_SHORTLIST
+  let failAddThrew = false;
+  try {
+    await ScreeningService.addToFinalShortlist({
+      applicationIds: [appFail.id],
+      jobId: smJob.id,
+      userId: smUser!.id,
+    });
+  } catch (e: any) {
+    failAddThrew = true;
+  }
+  assert(failAddThrew, 'State Guard: SCREENING_FAILED application CANNOT be added to Final Shortlist');
+
+  let holdAddThrew = false;
+  try {
+    await ScreeningService.addToFinalShortlist({
+      applicationIds: [appHold.id],
+      jobId: smJob.id,
+      userId: smUser!.id,
+    });
+  } catch (e: any) {
+    holdAddThrew = true;
+  }
+  assert(holdAddThrew, 'State Guard: SCREENING_HOLD application CANNOT be added to Final Shortlist');
+
+  // Valid Transition: SCREENING_PASSED -> FINAL_SHORTLIST
+  const shortlistResult = await ScreeningService.addToFinalShortlist({
+    applicationIds: [appPass.id],
+    jobId: smJob.id,
+    userId: smUser!.id,
+    remarks: 'Batch 1 Client Ready',
+  });
+  assert(shortlistResult.count === 1, 'Final Shortlist: Successfully finalized 1 passed candidate');
+
+  const appFinalShortlisted = await prisma.application.findUnique({ where: { id: appPass.id } });
+  assert(appFinalShortlisted?.currentStage === 'FINAL_SHORTLIST', 'Application stage successfully moved to FINAL_SHORTLIST');
+  assert(appFinalShortlisted?.finalShortlistedById === smUser!.id, 'finalShortlistedById recorded properly');
+  assert(appFinalShortlisted?.finalShortlistedAt !== null, 'finalShortlistedAt timestamp recorded');
+
+  // 5. Client Submission State Machine Guards: Only FINAL_SHORTLIST can be submitted
+  let submitHoldThrew = false;
+  try {
+    await SubmissionService.createSubmission({
+      companyId: smCompany.id,
+      jobId: smJob.id,
+      applicationIds: [appHold.id],
+      submittedById: smUser!.id,
+      submissionMethod: 'WHATSAPP_MANUAL',
+    });
+  } catch (e: any) {
+    submitHoldThrew = true;
+  }
+  assert(submitHoldThrew, 'State Guard: Non-finalized (HOLD) candidate CANNOT be submitted to client');
+
+  // Valid Client Submission: FINAL_SHORTLIST -> SENT_TO_CLIENT
+  const submission = await SubmissionService.createSubmission({
+    companyId: smCompany.id,
+    jobId: smJob.id,
+    applicationIds: [appPass.id],
+    submittedById: smUser!.id,
+    submissionMethod: 'WHATSAPP_MANUAL',
+    remarks: 'Batch dispatch via WhatsApp to HR Head',
+  });
+
+  assert(submission.id !== undefined, 'Client Submission created successfully');
+  assert(submission.submissionCode.startsWith('SUB-'), 'Submission code generated in SUB-xxxxxx format');
+
+  const subItems = await prisma.clientSubmissionItem.findMany({ where: { submissionId: submission.id } });
+  assert(subItems.length === 1 && subItems[0].applicationId === appPass.id, 'ClientSubmissionItem created for candidate');
+
+  const appSent = await prisma.application.findUnique({ where: { id: appPass.id } });
+  assert(appSent?.currentStage === 'SENT_TO_CLIENT', 'Application transitioned to SENT_TO_CLIENT upon submission');
+
+  // 6. Multi-Round Interview Progression for Submitted Candidate
+  const interviewDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+  const interview = await InterviewService.scheduleInterview({
+    applicationId: appPass.id,
+    roundName: 'Round 1 - Face to Face Technical',
+    roundNumber: 1,
+    scheduledAt: interviewDate.toISOString(),
+    mode: 'OFFLINE',
+    location: 'Pune Regional Office, Baner',
+    userId: smUser!.id,
+  });
+
+  assert(interview.id !== undefined, 'Interview round scheduled for submitted candidate');
+  assert(interview.roundNumber === 1, 'Interview round number is 1');
+
+  const appInInterview = await prisma.application.findUnique({ where: { id: appPass.id } });
+  assert(appInInterview?.currentStage === 'INTERVIEW_SCHEDULED', 'Application transitioned to INTERVIEW_SCHEDULED');
+
+  // 7. Full RBAC Matrix Verification across All 8 System Roles
+  const rolesWithScreeningEval = ['SUPER_ADMIN', 'OPERATIONS_HEAD', 'SCREENING_MANAGER'];
+  const allRoles = Object.keys(DEFAULT_ROLE_PERMISSIONS) as (keyof typeof DEFAULT_ROLE_PERMISSIONS)[];
+
+  assert(allRoles.length === 8, 'RBAC Matrix: All 8 system roles tested');
+
+  for (const role of allRoles) {
+    const permissions = DEFAULT_ROLE_PERMISSIONS[role];
+    const canEvalScreening = role === 'SUPER_ADMIN' || permissions.includes('screening.evaluate');
+    const canFinalizeShortlist = role === 'SUPER_ADMIN' || permissions.includes('shortlist.finalize');
+    const canManageSubmission = role === 'SUPER_ADMIN' || permissions.includes('submission.manage');
+
+    if (rolesWithScreeningEval.includes(role)) {
+      assert(
+        canEvalScreening && canFinalizeShortlist && canManageSubmission,
+        `RBAC: Role ${role} is AUTHORIZED for screening evaluation, shortlist finalization, and client submission`
+      );
+    } else {
+      assert(
+        !canEvalScreening && !canFinalizeShortlist && !canManageSubmission,
+        `RBAC: Role ${role} is STRICTLY FORBIDDEN from evaluating screening or submitting to clients`
+      );
+    }
+  }
+
+  // ==========================================
   // TEST SUMMARY
   // ==========================================
   console.log('\n====================================================');

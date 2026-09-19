@@ -282,28 +282,44 @@ export class ReportService {
     }> = {};
 
     for (const c of candidates) {
-      const loc = c.currentLocation || 'Unknown';
-      if (!locationMap[loc]) {
-        locationMap[loc] = {
-          location: loc,
-          totalLeads: 0,
-          rnr: 0,
-          callbacks: 0,
-          shortlisted: 0,
-          notInterested: 0,
-          connected: 0,
-        };
-      }
+      if (c.applications.length === 0) {
+        const loc = c.currentLocation || 'Unknown';
+        if (!locationMap[loc]) {
+          locationMap[loc] = {
+            location: loc,
+            totalLeads: 0,
+            rnr: 0,
+            callbacks: 0,
+            shortlisted: 0,
+            notInterested: 0,
+            connected: 0,
+          };
+        }
+        locationMap[loc].totalLeads++;
+      } else {
+        for (const app of c.applications) {
+          const loc = app.targetLocation || c.currentLocation || 'Unknown';
+          if (!locationMap[loc]) {
+            locationMap[loc] = {
+              location: loc,
+              totalLeads: 0,
+              rnr: 0,
+              callbacks: 0,
+              shortlisted: 0,
+              notInterested: 0,
+              connected: 0,
+            };
+          }
 
-      locationMap[loc].totalLeads++;
+          locationMap[loc].totalLeads++;
 
-      for (const app of c.applications) {
-        for (const log of app.callLogs) {
-          if (log.callOutcome === 'RNR') locationMap[loc].rnr++;
-          if (log.callOutcome === 'CALLBACK' || log.callbackRequired) locationMap[loc].callbacks++;
-          if (log.callOutcome === 'SHORTLISTED') locationMap[loc].shortlisted++;
-          if (log.callOutcome === 'NOT_INTERESTED') locationMap[loc].notInterested++;
-          if (log.callOutcome === 'CONNECTED') locationMap[loc].connected++;
+          for (const log of app.callLogs) {
+            if (log.callOutcome === 'RNR') locationMap[loc].rnr++;
+            if (log.callOutcome === 'CALLBACK' || log.callbackRequired) locationMap[loc].callbacks++;
+            if (log.callOutcome === 'SHORTLISTED') locationMap[loc].shortlisted++;
+            if (log.callOutcome === 'NOT_INTERESTED') locationMap[loc].notInterested++;
+            if (log.callOutcome === 'CONNECTED') locationMap[loc].connected++;
+          }
         }
       }
     }

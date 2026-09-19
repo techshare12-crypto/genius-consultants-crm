@@ -71,6 +71,7 @@ interface ApplicationItem {
   candidateId: string;
   jobId: string;
   companyId: string;
+  targetLocation?: string | null;
   currentStage: string;
   formStatus: string;
   cvStatus: string;
@@ -102,6 +103,7 @@ interface ApplicationItem {
     id: string;
     jobTitle: string;
     location?: string;
+    locations?: any[];
     vacancies?: number;
     salaryMin?: number | null;
     salaryMax?: number | null;
@@ -364,7 +366,7 @@ export default function ExecutiveCallingWorkspacePage() {
       age: c.age ?? null,
       gender: c.gender ?? 'Male',
       currentLocation: c.currentLocation ?? '',
-      appliedLocation: selectedApp.job.location ?? '',
+      appliedLocation: selectedApp.targetLocation || selectedApp.job?.location || '',
       education: c.highestEducation ?? '',
       experienceYears: c.experienceYears ?? 0,
       experienceMonths: c.experienceMonths ?? 0,
@@ -640,33 +642,55 @@ export default function ExecutiveCallingWorkspacePage() {
     }
 
     // 4. Location Match Rule
-    const jobLoc = (job.location || '').trim().toLowerCase();
+    const validJobLocations: string[] = [];
+    if (job.locations && Array.isArray(job.locations) && job.locations.length > 0) {
+      job.locations.forEach((loc: any) => {
+        const cityName = typeof loc === 'string' ? loc : loc.city;
+        if (cityName) validJobLocations.push(cityName.trim());
+      });
+    }
+    if (job.location) {
+      job.location.split(',').forEach((l: string) => {
+        const trimmed = l.trim();
+        if (trimmed && !validJobLocations.includes(trimmed)) validJobLocations.push(trimmed);
+      });
+    }
+    if (selectedApp.targetLocation && !validJobLocations.includes(selectedApp.targetLocation.trim())) {
+      validJobLocations.push(selectedApp.targetLocation.trim());
+    }
+
+    const jobRequirementDisplay = validJobLocations.length > 0 ? validJobLocations.join(', ') : job.location || 'Open / Flexible';
     const candLoc = (verifForm.currentLocation || '').trim().toLowerCase();
     const applLoc = (verifForm.appliedLocation || '').trim().toLowerCase();
 
-    if (jobLoc) {
+    if (validJobLocations.length > 0) {
       if (candLoc || applLoc) {
-        if (candLoc.includes(jobLoc) || jobLoc.includes(candLoc) || applLoc.includes(jobLoc)) {
+        const isMatched = validJobLocations.some((jLoc) => {
+          const normJ = jLoc.toLowerCase();
+          return candLoc.includes(normJ) || normJ.includes(candLoc) || applLoc.includes(normJ) || normJ.includes(applLoc);
+        });
+
+        if (isMatched) {
           rules.push({
             rule: 'Location Match',
-            requirement: job.location || 'Any',
-            verifiedValue: verifForm.currentLocation || verifForm.appliedLocation || 'Confirmed',
+            requirement: jobRequirementDisplay,
+            verifiedValue: verifForm.appliedLocation || verifForm.currentLocation || 'Confirmed',
             status: 'MATCH',
-            reason: `Candidate location matches opening (${job.location})`,
+            reason: `Candidate location matches opening (${jobRequirementDisplay})`,
           });
         } else {
           rules.push({
             rule: 'Location Match',
-            requirement: job.location || 'Any',
+            requirement: jobRequirementDisplay,
             verifiedValue: verifForm.currentLocation || verifForm.appliedLocation || 'Different',
             status: 'REVIEW',
-            reason: `Candidate in ${verifForm.currentLocation}, job in ${job.location}. Verify relocation willingness.`,
+            reason: `Candidate in ${verifForm.currentLocation || 'Unknown'}, job in ${jobRequirementDisplay}. Verify relocation willingness.`,
           });
         }
       } else {
         rules.push({
           rule: 'Location Match',
-          requirement: job.location || 'Any',
+          requirement: jobRequirementDisplay,
           verifiedValue: 'Not Verified',
           status: 'REVIEW',
           reason: 'Candidate location preference has not been confirmed on call',
@@ -1299,9 +1323,24 @@ export default function ExecutiveCallingWorkspacePage() {
                   <div className="text-xl font-bold text-white mt-0.5">
                     {selectedApp.candidate.fullName}
                   </div>
-                  <div className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                    <Building2 className="w-3.5 h-3.5" />
-                    <span>{selectedApp.company.companyName}</span>
+                  <div className="text-xs text-slate-300 flex flex-wrap items-center gap-2.5 mt-1">
+                    <span className="flex items-center gap-1">
+                      <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                      <span>{selectedApp.company.companyName}</span>
+                    </span>
+                    <span>•</span>
+                    <span className="flex items-center gap-1 text-teal-300 font-medium">
+                      <MapPin className="w-3.5 h-3.5 text-teal-400" />
+                      <span>Target Location: {selectedApp.targetLocation || selectedApp.job?.location || 'Any'}</span>
+                    </span>
+                    {selectedApp.candidate.currentLocation && (
+                      <>
+                        <span>•</span>
+                        <span className="text-slate-400">
+                          Residence: {selectedApp.candidate.currentLocation}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 

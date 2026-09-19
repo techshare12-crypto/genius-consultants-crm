@@ -38,7 +38,16 @@ export class SubmissionService {
       // 3. Create Child Items and Advance Applications to SENT_TO_CLIENT
       for (const appId of applicationIds) {
         const app = await tx.application.findUnique({ where: { id: appId } });
-        if (!app) continue;
+        if (!app) {
+          throw new Error(`Application ID ${appId} not found`);
+        }
+
+        // Strict State Machine: Only candidates in FINAL_SHORTLIST stage can be dispatched to clients
+        if (app.currentStage !== 'FINAL_SHORTLIST') {
+          throw new Error(
+            `Application ${app.applicationCode || appId} cannot be submitted to client. Current stage is '${app.currentStage}', but only candidates in 'FINAL_SHORTLIST' stage can be submitted.`
+          );
+        }
 
         await tx.clientSubmissionItem.create({
           data: {

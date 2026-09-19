@@ -58,6 +58,12 @@ export const CreateCompanySchema = z.object({
   }).optional(),
 });
 
+export const JobLocationInputSchema = z.object({
+  city: z.string().min(2, 'City is required'),
+  state: z.string().optional().nullable(),
+  vacancies: z.number().int().min(1).default(1),
+});
+
 export const CreateJobSchema = z.object({
   companyId: z.string().uuid('Invalid company ID'),
   jobTitle: z.string().min(2, 'Job title is required'),
@@ -65,6 +71,7 @@ export const CreateJobSchema = z.object({
   jobDescription: z.string().optional(),
   vacancies: z.number().int().min(1).default(1),
   location: z.string().min(2, 'Location is required'),
+  locations: z.array(z.union([z.string(), JobLocationInputSchema])).optional(),
   salaryMin: z.number().optional().nullable(),
   salaryMax: z.number().optional().nullable(),
   salaryText: z.string().optional(),

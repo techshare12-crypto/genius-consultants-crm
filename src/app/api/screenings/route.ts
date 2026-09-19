@@ -31,8 +31,18 @@ export async function GET(req: NextRequest) {
     where,
     include: {
       candidate: true,
-      job: { select: { id: true, jobTitle: true, location: true, company: { select: { companyName: true } } } },
+      job: {
+        select: {
+          id: true,
+          jobCode: true,
+          jobTitle: true,
+          location: true,
+          companyId: true,
+          company: { select: { id: true, companyName: true, city: true } },
+        },
+      },
       assignedExecutive: { select: { id: true, fullName: true } },
+      finalShortlistedBy: { select: { id: true, fullName: true } },
       screenings: {
         include: { screener: { select: { id: true, fullName: true } } },
         orderBy: { createdAt: 'desc' },

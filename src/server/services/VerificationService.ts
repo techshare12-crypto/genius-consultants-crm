@@ -54,6 +54,7 @@ export class VerificationService {
     verified: Partial<VerificationDataInput>,
     job: {
       location?: string | null;
+      locations?: Array<{ city: string; state?: string | null }> | string[] | null;
       salaryMin?: any;
       salaryMax?: any;
       experienceMin?: number | null;
@@ -322,38 +323,59 @@ export class VerificationService {
     }
 
     // 6. Location Match
-    const jobLoc = (job.location || '').trim().toLowerCase();
+    const validJobLocations: string[] = [];
+    if (job.locations && Array.isArray(job.locations) && job.locations.length > 0) {
+      job.locations.forEach((loc: any) => {
+        const cityName = typeof loc === 'string' ? loc : loc.city;
+        if (cityName) validJobLocations.push(cityName.trim());
+      });
+    }
+    if (job.location) {
+      job.location.split(',').forEach((l: string) => {
+        const trimmed = l.trim();
+        if (trimmed && !validJobLocations.includes(trimmed)) {
+          validJobLocations.push(trimmed);
+        }
+      });
+    }
+
+    const jobRequirementDisplay = validJobLocations.length > 0 ? validJobLocations.join(', ') : job.location || 'Open / Flexible';
     const candLoc = (verified.currentLocation || '').trim().toLowerCase();
     const applLoc = (verified.appliedLocation || '').trim().toLowerCase();
 
-    if (jobLoc) {
+    if (validJobLocations.length > 0) {
       if (candLoc || applLoc) {
-        if (candLoc.includes(jobLoc) || jobLoc.includes(candLoc) || applLoc.includes(jobLoc)) {
+        const isMatched = validJobLocations.some((jLoc) => {
+          const normJ = jLoc.toLowerCase();
+          return candLoc.includes(normJ) || normJ.includes(candLoc) || applLoc.includes(normJ) || normJ.includes(applLoc);
+        });
+
+        if (isMatched) {
           criteria.push({
             key: 'location',
             label: 'Location Match',
-            requirement: job.location || 'Any',
-            candidateValue: `${verified.currentLocation || verified.appliedLocation} (Verified)`,
+            requirement: jobRequirementDisplay,
+            candidateValue: `${verified.appliedLocation || verified.currentLocation} (Verified)`,
             status: 'MATCH',
             isMandatory: false,
-            notes: `Candidate location matches opening (${job.location})`,
+            notes: `Candidate location matches opening (${jobRequirementDisplay})`,
           });
         } else {
           criteria.push({
             key: 'location',
             label: 'Location Match',
-            requirement: job.location || 'Any',
+            requirement: jobRequirementDisplay,
             candidateValue: `${verified.currentLocation || verified.appliedLocation} (Verified)`,
             status: 'REVIEW',
             isMandatory: false,
-            notes: `Candidate in ${verified.currentLocation}, job in ${job.location}. Verify relocation willingness.`,
+            notes: `Candidate in ${verified.currentLocation || 'Unknown'}, job in ${jobRequirementDisplay}. Verify relocation willingness.`,
           });
         }
       } else {
         criteria.push({
           key: 'location',
           label: 'Location Match',
-          requirement: job.location || 'Any',
+          requirement: jobRequirementDisplay,
           candidateValue: 'Not Verified',
           status: 'REVIEW',
           isMandatory: false,

@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
     const file = formData.get('file') as File | null;
     const targetJobId = formData.get('jobId') as string;
     const targetCompanyId = formData.get('companyId') as string;
+    const targetLocation = (formData.get('targetLocation') as string) || undefined;
 
     if (!file || !targetJobId || !targetCompanyId) {
       return NextResponse.json({ success: false, error: 'File, Job ID, and Company ID are required' }, { status: 400 });
@@ -26,7 +27,8 @@ export async function POST(req: NextRequest) {
       file.name,
       session.userId,
       targetJobId,
-      targetCompanyId
+      targetCompanyId,
+      targetLocation
     );
 
     return NextResponse.json({ success: true, data: result });

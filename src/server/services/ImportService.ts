@@ -207,11 +207,22 @@ export class ImportService {
     const previewRows = candidateMasterData.slice(0, 10).map((row) => {
       const rawPhone = row['Phone Number'] || row['Contact number'] || row['Phone'] || '';
       const normPhone = normalizeIndianPhone(rawPhone);
+      const candLocation = String(row['Location'] || row['Current location'] || row['City'] || '').trim();
+      const appliedLocation = String(
+        row['Applied Location'] ||
+        row['Applied location'] ||
+        row['Target Location'] ||
+        row['Job Location'] ||
+        row['Work Location'] ||
+        ''
+      ).trim();
+
       return {
         name: row['Candidate Name'] || row['Name'] || '',
         rawPhone: String(rawPhone),
         normalizedPhone: normPhone || 'INVALID',
-        location: row['Location'] || row['Current location'] || '',
+        location: candLocation,
+        appliedLocation: appliedLocation || candLocation,
         experience: row['Experience'] || row['Years of experience'] || '',
         education: row['Education'] || '',
         currentJob: row['Current/Latest Job'] || row['Previous/current company'] || '',
@@ -245,7 +256,8 @@ export class ImportService {
     filename: string,
     uploadedById: string,
     targetJobId: string,
-    targetCompanyId: string
+    targetCompanyId: string,
+    defaultTargetLocation?: string
   ) {
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const detectedSheets = workbook.SheetNames;
@@ -276,12 +288,28 @@ export class ImportService {
     // 1. Validate Target Job Requirement and resolve effective company
     const targetJob = await prisma.jobRequirement.findUnique({
       where: { id: targetJobId },
-      include: { company: true },
+      include: { company: true, locations: true },
     });
     if (!targetJob) {
       throw new Error(`Target Job Requirement with ID '${targetJobId}' was not found.`);
     }
     const effectiveCompanyId = targetJob.companyId || targetCompanyId;
+
+    // Build valid job locations list
+    const validJobLocations: string[] = [];
+    if (targetJob.locations && targetJob.locations.length > 0) {
+      targetJob.locations.forEach((l) => {
+        if (l.city) validJobLocations.push(l.city.trim());
+      });
+    }
+    if (targetJob.location) {
+      targetJob.location.split(',').forEach((l) => {
+        const trimmed = l.trim();
+        if (trimmed && !validJobLocations.includes(trimmed)) {
+          validJobLocations.push(trimmed);
+        }
+      });
+    }
 
     // 2. Create ImportBatch with guaranteed collision-free batchCode
     let batchCount = await prisma.importBatch.count();
@@ -335,7 +363,7 @@ export class ImportService {
       const dashRow = dashboardPhoneMap.get(normPhone) || {};
       const isShortlisted = shortlistedPhoneMap.has(normPhone);
 
-      const location = String(
+      const candLocation = String(
         row['Location'] ||
         row['Current location'] ||
         row['City'] ||
@@ -343,6 +371,29 @@ export class ImportService {
         dashRow['Current location'] ||
         ''
       ).trim();
+
+      const rawAppliedLocation = String(
+        row['Applied Location'] ||
+        row['Applied location'] ||
+        row['Target Location'] ||
+        row['Job Location'] ||
+        row['Work Location'] ||
+        dashRow['Applied location'] ||
+        dashRow['Applied Location'] ||
+        defaultTargetLocation ||
+        ''
+      ).trim();
+
+      // Normalize target location against valid job locations
+      let targetLocation = rawAppliedLocation;
+      if (!targetLocation && validJobLocations.length === 1) {
+        targetLocation = validJobLocations[0];
+      } else if (targetLocation && validJobLocations.length > 0) {
+        const matched = validJobLocations.find((v) => v.toLowerCase() === targetLocation.toLowerCase());
+        if (matched) targetLocation = matched;
+      } else if (!targetLocation && targetJob.location) {
+        targetLocation = targetJob.location;
+      }
 
       const education = String(
         row['Education'] ||
@@ -432,7 +483,7 @@ export class ImportService {
             rawPhone: String(rawPhone),
             normalizedPhone: normPhone,
             email: normEmail,
-            currentLocation: location,
+            currentLocation: candLocation,
             education,
             experienceYears: expYears,
             currentJob,
@@ -450,7 +501,7 @@ export class ImportService {
         // Enrich existing candidate if details were missing
         const updateData: any = {};
         if (!candidate.email && normEmail) updateData.email = normEmail;
-        if (!candidate.currentLocation && location) updateData.currentLocation = location;
+        if (!candidate.currentLocation && candLocation) updateData.currentLocation = candLocation;
         if (!candidate.education && education) updateData.education = education;
         if (!candidate.currentJob && currentJob) updateData.currentJob = currentJob;
         if (candidate.experienceYears === 0 && expYears > 0) updateData.experienceYears = expYears;
@@ -489,6 +540,7 @@ export class ImportService {
             candidateId: candidate.id,
             jobId: targetJobId,
             companyId: effectiveCompanyId,
+            targetLocation: targetLocation || null,
             currentStage: initialStage,
             formStatus,
             cvStatus,
@@ -498,19 +550,26 @@ export class ImportService {
             createdById: uploadedById,
           },
         });
-      } else if (isShortlisted && existingApp.currentStage === 'NEW') {
-        // Reconcile shortlist state for existing application
-        await prisma.application.update({
-          where: { id: existingApp.id },
-          data: {
-            currentStage: 'SHORTLISTED',
-            formStatus: 'RECEIVED',
-            cvStatus: 'CV_RECEIVED',
-            formReceivedAt: existingApp.formReceivedAt || new Date(),
-            cvReceivedAt: existingApp.cvReceivedAt || new Date(),
-            readyForScreeningAt: existingApp.readyForScreeningAt || new Date(),
-          },
-        });
+      } else {
+        const updateAppData: any = {};
+        if (isShortlisted && existingApp.currentStage === 'NEW') {
+          updateAppData.currentStage = 'SHORTLISTED';
+          updateAppData.formStatus = 'RECEIVED';
+          updateAppData.cvStatus = 'CV_RECEIVED';
+          updateAppData.formReceivedAt = existingApp.formReceivedAt || new Date();
+          updateAppData.cvReceivedAt = existingApp.cvReceivedAt || new Date();
+          updateAppData.readyForScreeningAt = existingApp.readyForScreeningAt || new Date();
+        }
+        if (!existingApp.targetLocation && targetLocation) {
+          updateAppData.targetLocation = targetLocation;
+        }
+
+        if (Object.keys(updateAppData).length > 0) {
+          await prisma.application.update({
+            where: { id: existingApp.id },
+            data: updateAppData,
+          });
+        }
       }
 
       importedCount++;

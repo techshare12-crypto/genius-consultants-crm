@@ -275,6 +275,7 @@ model JobRequirement {
 
   company                Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdBy              User             @relation("JobCreator", fields: [createdById], references: [id])
+  locations              JobRequirementLocation[]
   applications           Application[]
   submissions            ClientSubmission[]
 
@@ -282,6 +283,22 @@ model JobRequirement {
   @@index([jobStatus])
   @@index([location])
   @@map("job_requirements")
+}
+
+model JobRequirementLocation {
+  id          String         @id @default(uuid())
+  jobId       String
+  city        String
+  state       String?
+  vacancies   Int            @default(1)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+
+  job         JobRequirement @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([city])
+  @@map("job_requirement_locations")
 }
 
 // ==========================================
@@ -401,6 +418,7 @@ model Application {
   readyForScreeningAt  DateTime?
   finalShortlistedAt   DateTime?
   finalShortlistedById String?
+  targetLocation       String?
   notes                String?
   createdById          String
   createdAt            DateTime         @default(now())
@@ -429,6 +447,7 @@ model Application {
   @@index([companyId])
   @@index([assignedExecutiveId, currentStage])
   @@index([currentStage])
+  @@index([targetLocation])
   @@map("applications")
 }
 
