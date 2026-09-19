@@ -59,33 +59,77 @@ export const CreateCompanySchema = z.object({
 });
 
 export const JobLocationInputSchema = z.object({
-  city: z.string().min(2, 'City is required'),
+  city: z.string().min(1, 'City is required'),
   state: z.string().optional().nullable(),
-  vacancies: z.number().int().min(1).default(1),
+  vacancies: z.number().int().min(1, 'Location vacancies must be at least 1').default(1),
 });
 
-export const CreateJobSchema = z.object({
-  companyId: z.string().uuid('Invalid company ID'),
-  jobTitle: z.string().min(2, 'Job title is required'),
-  department: z.string().optional(),
-  jobDescription: z.string().optional(),
-  vacancies: z.number().int().min(1).default(1),
-  location: z.string().min(2, 'Location is required'),
-  locations: z.array(z.union([z.string(), JobLocationInputSchema])).optional(),
-  salaryMin: z.number().optional().nullable(),
-  salaryMax: z.number().optional().nullable(),
-  salaryText: z.string().optional(),
-  experienceMin: z.number().int().min(0).default(0),
-  experienceMax: z.number().int().optional().nullable(),
-  educationRequirement: z.string().optional(),
-  genderRequirement: z.string().optional(),
-  ageRequirement: z.string().optional(),
-  skillsRequired: z.array(z.string()).default([]),
-  twoWheelerRequired: z.boolean().default(false),
-  drivingLicenseRequired: z.boolean().default(false),
-  noticePeriod: z.string().optional(),
-  jobStatus: z.enum(['DRAFT', 'OPEN', 'ON_HOLD', 'FILLED', 'CLOSED', 'CANCELLED']).default('OPEN'),
-});
+export const CreateJobSchema = z
+  .object({
+    companyId: z.string().uuid('Invalid company ID'),
+    jobTitle: z.string().min(2, 'Job title is required'),
+    department: z.string().optional(),
+    jobDescription: z.string().optional(),
+    vacancies: z.number().int().min(1, 'Total vacancies must be at least 1').default(1),
+    location: z.string().min(2, 'Location is required'),
+    locations: z.array(z.union([z.string(), JobLocationInputSchema])).optional(),
+    salaryMin: z.number().optional().nullable(),
+    salaryMax: z.number().optional().nullable(),
+    salaryText: z.string().optional(),
+    experienceMin: z.number().int().min(0).default(0),
+    experienceMax: z.number().int().optional().nullable(),
+    educationRequirement: z.string().optional(),
+    genderRequirement: z.string().optional(),
+    ageRequirement: z.string().optional(),
+    skillsRequired: z.array(z.string()).default([]),
+    twoWheelerRequired: z.boolean().default(false),
+    drivingLicenseRequired: z.boolean().default(false),
+    noticePeriod: z.string().optional(),
+    jobStatus: z.enum(['DRAFT', 'OPEN', 'ON_HOLD', 'FILLED', 'CLOSED', 'CANCELLED']).default('OPEN'),
+  })
+  .superRefine((val, ctx) => {
+    if (val.locations && val.locations.length > 0) {
+      let totalAllocated = 0;
+      for (let i = 0; i < val.locations.length; i++) {
+        const loc = val.locations[i];
+        if (typeof loc === 'string') {
+          if (!loc.trim()) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'Location city cannot be empty',
+              path: ['locations', i],
+            });
+          }
+          // If only 1 location is provided as string, it covers all vacancies; otherwise 1
+          totalAllocated += val.locations.length === 1 ? val.vacancies : 1;
+        } else {
+          if (!loc.city || !loc.city.trim()) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'Location city cannot be empty',
+              path: ['locations', i, 'city'],
+            });
+          }
+          if (loc.vacancies === undefined || loc.vacancies === null || loc.vacancies < 1) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'Location vacancies must be at least 1',
+              path: ['locations', i, 'vacancies'],
+            });
+          }
+          totalAllocated += Number(loc.vacancies) || 0;
+        }
+      }
+
+      if (totalAllocated !== val.vacancies) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Location vacancy allocation must equal total vacancies. Allocated: ${totalAllocated} / ${val.vacancies}.`,
+          path: ['locations'],
+        });
+      }
+    }
+  });
 
 // ==========================================
 // CANDIDATES & APPLICATIONS

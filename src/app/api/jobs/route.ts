@@ -59,10 +59,16 @@ export async function POST(req: NextRequest) {
     if (data.locations && Array.isArray(data.locations) && data.locations.length > 0) {
       locationRecords = data.locations.map((loc) => {
         if (typeof loc === 'string') {
-          return { city: loc.trim(), state: null, vacancies: 1 };
+          return { city: loc.trim(), state: null, vacancies: data.locations!.length === 1 ? data.vacancies : 1 };
         }
-        return { city: loc.city.trim(), state: loc.state || null, vacancies: loc.vacancies || 1 };
+        return {
+          city: loc.city.trim(),
+          state: loc.state || null,
+          vacancies: loc.vacancies !== undefined ? Number(loc.vacancies) : (data.locations!.length === 1 ? data.vacancies : 1),
+        };
       });
+    } else if (data.location && data.location.trim()) {
+      locationRecords = [{ city: data.location.trim(), state: null, vacancies: data.vacancies }];
     }
 
     const job = await prisma.$transaction(async (tx) => {
@@ -116,7 +122,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: job });
   } catch (err: any) {
-    console.error('Create job error:', err);
-    return NextResponse.json({ success: false, error: 'Failed to create job requirement' }, { status: 500 });
+    console.error('Create job error:', {
+      message: err?.message,
+      code: err?.code,
+      meta: err?.meta,
+    });
+    return NextResponse.json(
+      { success: false, error: 'Unable to create job requirement. Please check the details and try again.' },
+      { status: 500 }
+    );
   }
 }

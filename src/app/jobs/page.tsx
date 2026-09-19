@@ -14,7 +14,31 @@ import {
   Bike,
   CreditCard,
   Banknote,
+  AlertCircle,
+  Trash2,
 } from 'lucide-react';
+
+interface JobLocationInput {
+  city: string;
+  vacancies: number;
+}
+
+const initialJobState = {
+  companyId: '',
+  jobTitle: '',
+  department: 'Field Sales',
+  vacancies: 10,
+  locations: [{ city: 'Kalaburagi', vacancies: 10 }] as JobLocationInput[],
+  salaryMin: 18000,
+  salaryMax: 25000,
+  salaryText: '18,000 - 25,000 + Fuel Allowance',
+  experienceMin: 0,
+  experienceMax: 4,
+  educationRequirement: 'Graduate (Any stream)',
+  twoWheelerRequired: true,
+  drivingLicenseRequired: true,
+  skillsRequired: 'Field Sales, Counter Sales, Communication',
+};
 
 export default function JobRequirementsPage() {
   const { hasPermission } = useAuth();
@@ -25,23 +49,9 @@ export default function JobRequirementsPage() {
 
   // Add Modal
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newJob, setNewJob] = useState({
-    companyId: '',
-    jobTitle: '',
-    department: 'Field Sales',
-    vacancies: 10,
-    location: 'Rajkot, Gujarat',
-    salaryMin: 18000,
-    salaryMax: 25000,
-    salaryText: '18,000 - 25,000 + Fuel Allowance',
-    experienceMin: 0,
-    experienceMax: 4,
-    educationRequirement: 'Graduate (Any stream)',
-    twoWheelerRequired: true,
-    drivingLicenseRequired: true,
-    skillsRequired: 'Field Sales, Counter Sales, Communication',
-  });
+  const [newJob, setNewJob] = useState(initialJobState);
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchJobs();
@@ -75,39 +85,135 @@ export default function JobRequirementsPage() {
     }
   };
 
+  const handleVacanciesChange = (totalVac: number) => {
+    setNewJob((prev) => {
+      // If single location exists, auto-sync its vacancies to total vacancies
+      if (prev.locations.length === 1) {
+        return {
+          ...prev,
+          vacancies: totalVac,
+          locations: [{ ...prev.locations[0], vacancies: totalVac }],
+        };
+      }
+      return { ...prev, vacancies: totalVac };
+    });
+  };
+
+  const handleAddLocation = () => {
+    setNewJob((prev) => {
+      const allocated = prev.locations.reduce((acc, l) => acc + (Number(l.vacancies) || 0), 0);
+      const remaining = Math.max(1, prev.vacancies - allocated);
+      return {
+        ...prev,
+        locations: [...prev.locations, { city: '', vacancies: remaining }],
+      };
+    });
+  };
+
+  const handleRemoveLocation = (index: number) => {
+    setNewJob((prev) => {
+      const updated = prev.locations.filter((_, i) => i !== index);
+      if (updated.length === 1) {
+        updated[0] = { ...updated[0], vacancies: prev.vacancies };
+      }
+      return { ...prev, locations: updated };
+    });
+  };
+
+  const handleLocationChange = (index: number, field: 'city' | 'vacancies', value: any) => {
+    setNewJob((prev) => {
+      const updated = [...prev.locations];
+      updated[index] = {
+        ...updated[index],
+        [field]: field === 'vacancies' ? (value === '' ? '' : Number(value)) : value,
+      };
+      return { ...prev, locations: updated };
+    });
+  };
+
+  const totalAllocated = newJob.locations.reduce((acc, l) => acc + (Number(l.vacancies) || 0), 0);
+  const isAllocationMatching = totalAllocated === Number(newJob.vacancies);
+  const hasEmptyCity = newJob.locations.some((l) => !l.city || !l.city.trim());
+  const hasInvalidVacancy = newJob.locations.some((l) => !l.vacancies || Number(l.vacancies) < 1);
+
   const handleCreateJob = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newJob.companyId) return;
+    if (!newJob.companyId) {
+      setFormError('Please select a client company.');
+      return;
+    }
+
+    if (newJob.locations.length === 0) {
+      setFormError('At least one location is required.');
+      return;
+    }
+
+    if (hasEmptyCity) {
+      setFormError('All location city fields must be filled.');
+      return;
+    }
+
+    if (hasInvalidVacancy) {
+      setFormError('Every location must have at least 1 vacancy.');
+      return;
+    }
+
+    if (!isAllocationMatching) {
+      setFormError(
+        `Location vacancy allocation must equal total vacancies. Allocated: ${totalAllocated} / ${newJob.vacancies}.`
+      );
+      return;
+    }
+
     setSubmitting(true);
+    setFormError(null);
 
     try {
-      const locList = newJob.location
-        .split(',')
-        .map((l) => l.trim())
-        .filter(Boolean);
+      const locSummary = newJob.locations
+        .map((l) => l.city.trim())
+        .filter(Boolean)
+        .join(', ');
 
       const res = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...newJob,
-          location: locList.join(', '),
-          locations: locList.map((city) => ({ city, vacancies: 1 })),
+          companyId: newJob.companyId,
+          jobTitle: newJob.jobTitle,
+          department: newJob.department,
           vacancies: Number(newJob.vacancies),
+          location: locSummary || 'N/A',
+          locations: newJob.locations.map((l) => ({
+            city: l.city.trim(),
+            vacancies: Number(l.vacancies),
+          })),
           salaryMin: Number(newJob.salaryMin),
           salaryMax: Number(newJob.salaryMax),
+          salaryText: newJob.salaryText,
           experienceMin: Number(newJob.experienceMin),
           experienceMax: Number(newJob.experienceMax),
-          skillsRequired: newJob.skillsRequired.split(',').map((s) => s.trim()).filter(Boolean),
+          educationRequirement: newJob.educationRequirement,
+          twoWheelerRequired: newJob.twoWheelerRequired,
+          drivingLicenseRequired: newJob.drivingLicenseRequired,
+          skillsRequired: newJob.skillsRequired
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
         }),
       });
 
       if (res.ok) {
         setShowAddModal(false);
+        setNewJob(initialJobState);
+        setFormError(null);
         await fetchJobs();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setFormError(d.error || 'Unable to create job requirement. Please check the details and try again.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error creating job', err);
+      setFormError('Network error. Unable to reach the server. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -220,18 +326,36 @@ export default function JobRequirementsPage() {
       {/* Add Job Modal */}
       <Modal
         isOpen={showAddModal}
-        onClose={() => setShowAddModal(false)}
+        onClose={() => {
+          if (!submitting) {
+            setShowAddModal(false);
+            setFormError(null);
+          }
+        }}
         title="Create Job Requirement Mandate"
-        subtitle="Specify client company, vacancies, and candidate criteria"
+        subtitle="Specify client company, vacancies, locations, and candidate eligibility criteria"
       >
         <form onSubmit={handleCreateJob} className="space-y-4">
+          {formError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg flex items-start gap-2 animate-fadeIn">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold">Unable to create job requirement</p>
+                <p className="text-[11px] mt-0.5 text-rose-600">{formError}</p>
+              </div>
+            </div>
+          )}
+
           <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Client Company</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Client Company *</label>
             <select
               required
               value={newJob.companyId}
-              onChange={(e) => setNewJob({ ...newJob, companyId: e.target.value })}
-              className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+              onChange={(e) => {
+                setNewJob({ ...newJob, companyId: e.target.value });
+                if (formError) setFormError(null);
+              }}
+              className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
             >
               <option value="">Select Company...</option>
               {companies.map((c) => (
@@ -244,39 +368,129 @@ export default function JobRequirementsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Job Title</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Job Title *</label>
               <input
                 type="text"
                 required
                 value={newJob.jobTitle}
-                onChange={(e) => setNewJob({ ...newJob, jobTitle: e.target.value })}
-                placeholder="e.g. Sales Executive - Rajkot"
-                className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+                onChange={(e) => {
+                  setNewJob({ ...newJob, jobTitle: e.target.value });
+                  if (formError) setFormError(null);
+                }}
+                placeholder="e.g. Sales Executive"
+                className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Vacancies</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Total Vacancies *</label>
               <input
                 type="number"
                 min="1"
                 required
                 value={newJob.vacancies}
-                onChange={(e) => setNewJob({ ...newJob, vacancies: Number(e.target.value) })}
-                className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+                onChange={(e) => {
+                  handleVacanciesChange(Math.max(1, Number(e.target.value) || 1));
+                  if (formError) setFormError(null);
+                }}
+                className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-teal-500 focus:border-teal-500 font-bold"
               />
+            </div>
+          </div>
+
+          {/* Structured Multi-Location & Vacancy Section */}
+          <div className="space-y-2 border border-slate-200 rounded-lg p-3 bg-slate-50/70">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-teal-600" />
+                Job Locations & Vacancies
+              </label>
+              <span
+                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
+                  isAllocationMatching && !hasEmptyCity && !hasInvalidVacancy
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                }`}
+              >
+                Allocated: {totalAllocated} / {newJob.vacancies} {isAllocationMatching ? '✓' : '⚠️'}
+              </span>
+            </div>
+
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              {newJob.locations.map((loc, idx) => (
+                <div key={idx} className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      required
+                      placeholder="City (e.g. Kalaburagi)"
+                      value={loc.city}
+                      onChange={(e) => {
+                        handleLocationChange(idx, 'city', e.target.value);
+                        if (formError) setFormError(null);
+                      }}
+                      className="w-full p-1.5 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                    />
+                  </div>
+                  <div className="w-28 flex items-center gap-1">
+                    <span className="text-[11px] text-slate-400 font-medium">Vac:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={loc.vacancies}
+                      onChange={(e) => {
+                        handleLocationChange(idx, 'vacancies', e.target.value);
+                        if (formError) setFormError(null);
+                      }}
+                      className="w-full p-1.5 border border-slate-200 rounded text-xs text-center font-bold focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
+                    />
+                  </div>
+                  {newJob.locations.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleRemoveLocation(idx);
+                        if (formError) setFormError(null);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                      title="Remove location"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  handleAddLocation();
+                  if (formError) setFormError(null);
+                }}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-teal-600 hover:text-teal-800 py-1 px-2 hover:bg-teal-50 rounded transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Location</span>
+              </button>
+              {!isAllocationMatching && (
+                <span className="text-[11px] text-amber-700 font-medium">
+                  Sum of location vacancies must equal {newJob.vacancies}
+                </span>
+              )}
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Location</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Department</label>
               <input
                 type="text"
-                required
-                value={newJob.location}
-                onChange={(e) => setNewJob({ ...newJob, location: e.target.value })}
-                placeholder="e.g. Rajkot, Gujarat"
-                className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+                value={newJob.department}
+                onChange={(e) => setNewJob({ ...newJob, department: e.target.value })}
+                placeholder="e.g. Field Sales"
+                className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
               />
             </div>
             <div>
@@ -286,44 +500,57 @@ export default function JobRequirementsPage() {
                 value={newJob.salaryText}
                 onChange={(e) => setNewJob({ ...newJob, salaryText: e.target.value })}
                 placeholder="e.g. 18,000 - 25,000 + Fuel"
-                className="w-full p-2 border border-slate-200 rounded-lg text-xs"
+                className="w-full p-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
               />
             </div>
           </div>
 
-          <div className="flex gap-4">
-            <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+          <div className="flex gap-4 pt-1">
+            <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={newJob.twoWheelerRequired}
                 onChange={(e) => setNewJob({ ...newJob, twoWheelerRequired: e.target.checked })}
+                className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
               />
               <span>Bike Mandatory</span>
             </label>
-            <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+            <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={newJob.drivingLicenseRequired}
                 onChange={(e) => setNewJob({ ...newJob, drivingLicenseRequired: e.target.checked })}
+                className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
               />
               <span>Driving License Mandatory</span>
             </label>
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => setShowAddModal(false)}
-              className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-medium"
+              disabled={submitting}
+              onClick={() => {
+                setShowAddModal(false);
+                setFormError(null);
+              }}
+              className="px-4 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={submitting}
-              className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50"
+              disabled={submitting || !isAllocationMatching || hasEmptyCity || hasInvalidVacancy}
+              className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition-colors"
             >
-              Save Job Requirement
+              {submitting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <span>Save Job Requirement</span>
+              )}
             </button>
           </div>
         </form>

@@ -13,6 +13,7 @@ import { QualityService } from '../src/server/services/QualityService';
 import { ReportService } from '../src/server/services/ReportService';
 import { ImportService } from '../src/server/services/ImportService';
 import { VerificationService } from '../src/server/services/VerificationService';
+import { CreateJobSchema } from '../src/server/validators/schemas';
 import { checkLoginRateLimit, resetLoginRateLimit } from '../src/server/utils/rateLimiter';
 import { verifyAndRestoreBackup } from '../scripts/restore-db';
 import { NextRequest } from 'next/server';
@@ -2033,6 +2034,397 @@ async function runTestSuite() {
       );
     }
   }
+
+  // ==========================================
+  // SUITE 23: UPSTREAM OPERATIONS FUNNEL (LEAD ASSIGNMENT → CALLING → FORM/CV → SCREENING GATE)
+  // ==========================================
+  console.log('\n--- Test Suite 23: Upstream Operations Funnel (Assignment, Form/CV, Gate) ---');
+
+  const opsCompany = await prisma.company.create({
+    data: {
+      companyCode: `COM-OPS-${Date.now().toString().slice(-6)}`,
+      companyName: 'Zepto Logistics Solutions',
+      industry: 'Quick Commerce',
+      city: 'Bengaluru',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  const opsJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-OPS-${Date.now().toString().slice(-6)}`,
+      jobTitle: 'Field Delivery Lead',
+      companyId: opsCompany.id,
+      createdById: superAdminUser!.id,
+      location: 'Bengaluru, Karnataka',
+      vacancies: 5,
+    },
+  });
+
+  const sibiExec = await prisma.user.findFirst({ where: { email: 'sibi@geniusconsultancy.com' } });
+  const priyaExecUser = await prisma.user.findFirst({ where: { email: 'priya@geniusconsultancy.com' } });
+  assert(sibiExec !== null && priyaExecUser !== null, 'Sibi and Priya test executives exist');
+
+  // 1. Create 3 Raw Unassigned Leads
+  const opsTime = Date.now();
+  const candA = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-OPS-A-${opsTime.toString().slice(-5)}`,
+      fullName: 'Anil Deshmukh (Full Funnel)',
+      rawPhone: `94${String(opsTime + 21).slice(-8)}`,
+      normalizedPhone: `94${String(opsTime + 21).slice(-8)}`,
+      currentLocation: 'Bengaluru',
+      source: 'EXCEL_IMPORT',
+    },
+  });
+
+  const appA = await prisma.application.create({
+    data: {
+      applicationCode: `APP-OPS-A-${opsTime.toString().slice(-5)}`,
+      candidateId: candA.id,
+      jobId: opsJob.id,
+      companyId: opsCompany.id,
+      targetLocation: 'Bengaluru',
+      currentStage: 'NEW',
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  assert(appA.assignedExecutiveId === null, 'Lead A starts as UNASSIGNED in NEW stage');
+
+  // 2. Application-level Assignment to Sibi
+  const assignResult = await AssignmentService.assignApplications({
+    applicationIds: [appA.id],
+    executiveId: sibiExec!.id,
+    assignedById: superAdminUser!.id,
+    reason: 'Initial lead assignment to Sibi',
+  });
+  assert(assignResult.count === 1, 'AssignmentService: Application assigned to Sibi');
+
+  const appAAssigned = await prisma.application.findUnique({ where: { id: appA.id } });
+  assert(appAAssigned?.assignedExecutiveId === sibiExec!.id, 'Application record reflects Sibi as assignedExecutiveId');
+  assert(appAAssigned?.currentStage === 'ASSIGNED', 'Application transitions from NEW to ASSIGNED');
+
+  // 3. Single Active Assignment Rule
+  const activeAssignmentsSibi = await prisma.applicationAssignmentHistory.findMany({
+    where: { applicationId: appA.id, unassignedAt: null },
+  });
+  assert(activeAssignmentsSibi.length === 1 && activeAssignmentsSibi[0].executiveId === sibiExec!.id, 'Active Assignment Rule: Exactly 1 active assignment history record exists');
+
+  // 4. Concurrency-Safe Reassignment to Priya closes Sibi's active assignment
+  await AssignmentService.assignApplications({
+    applicationIds: [appA.id],
+    executiveId: priyaExecUser!.id,
+    assignedById: superAdminUser!.id,
+    reason: 'Reassigned from Sibi to Priya',
+  });
+
+  const oldHistory = await prisma.applicationAssignmentHistory.findFirst({
+    where: { applicationId: appA.id, executiveId: sibiExec!.id },
+  });
+  assert(oldHistory?.unassignedAt !== null, 'Reassignment: Sibi assignment history successfully closed with unassignedAt timestamp');
+
+  const newHistory = await prisma.applicationAssignmentHistory.findMany({
+    where: { applicationId: appA.id, unassignedAt: null },
+  });
+  assert(newHistory.length === 1 && newHistory[0].executiveId === priyaExecUser!.id, 'Reassignment: Priya is now the single active assigned executive');
+
+  // Reassign back to Sibi for testing calling & document workflow
+  await AssignmentService.assignApplications({
+    applicationIds: [appA.id],
+    executiveId: sibiExec!.id,
+    assignedById: superAdminUser!.id,
+    reason: 'Restoring Sibi assignment for calling',
+  });
+
+  // 5. Calling Workflow: Manual Call Logged -> CALLING
+  const callResult = await CallingService.logCall({
+    applicationId: appA.id,
+    candidateId: candA.id,
+    executiveId: sibiExec!.id,
+    callOutcome: 'INTERESTED',
+    remarks: 'Candidate is interested in delivery role, has bike and valid driving license.',
+  });
+  assert(callResult.callLog.callOutcome === 'INTERESTED', 'CallingService: Manual call logged with outcome INTERESTED');
+
+  const appACalling = await prisma.application.findUnique({ where: { id: appA.id } });
+  assert(appACalling?.currentStage === 'CALLING', 'CallingService: Lead moves from ASSIGNED to CALLING upon call logging');
+
+  // 6. Non-Shortlisted Document Gate Test: Collecting docs in CALLING does NOT bypass SHORTLISTED
+  await ScreeningService.updateDocumentStatus(appA.id, sibiExec!.id, { formStatus: 'SENT' });
+  const appAFormSent = await prisma.application.findUnique({ where: { id: appA.id } });
+  assert(appAFormSent?.formStatus === 'SENT' && appAFormSent?.formSentAt !== null, 'Form Workflow: Form marked SENT with timestamp');
+
+  await ScreeningService.updateDocumentStatus(appA.id, sibiExec!.id, { formStatus: 'RECEIVED' });
+  const appAFormRecv = await prisma.application.findUnique({ where: { id: appA.id } });
+  const initialFormTime = appAFormRecv?.formReceivedAt;
+  assert(appAFormRecv?.formStatus === 'RECEIVED' && initialFormTime !== null, 'Form Workflow: Form marked RECEIVED with timestamp');
+
+  await ScreeningService.updateDocumentStatus(appA.id, sibiExec!.id, { cvStatus: 'CV_REQUESTED' });
+  const appACvReq = await prisma.application.findUnique({ where: { id: appA.id } });
+  assert(appACvReq?.cvStatus === 'CV_REQUESTED' && appACvReq?.cvRequestedAt !== null, 'CV Workflow: CV marked CV_REQUESTED with timestamp');
+
+  await ScreeningService.updateDocumentStatus(appA.id, sibiExec!.id, { cvStatus: 'CV_RECEIVED' });
+  const appACvRecv = await prisma.application.findUnique({ where: { id: appA.id } });
+  const initialCvTime = appACvRecv?.cvReceivedAt;
+  assert(appACvRecv?.cvStatus === 'CV_RECEIVED' && initialCvTime !== null, 'CV Workflow: CV marked CV_RECEIVED with timestamp');
+
+  // Strict Rule Check: Candidate in CALLING stage must NOT auto-enter SCREENING_PENDING
+  assert(
+    appACvRecv?.currentStage === 'CALLING',
+    'Screening Gate Safeguard: Receiving Form + CV while in CALLING does NOT bypass SHORTLISTED (stage remains CALLING)'
+  );
+
+  // 7. Idempotency Check: Resubmitting Form/CV RECEIVED does not overwrite timestamps
+  await ScreeningService.updateDocumentStatus(appA.id, sibiExec!.id, { formStatus: 'RECEIVED' });
+  await ScreeningService.updateDocumentStatus(appA.id, sibiExec!.id, { cvStatus: 'CV_RECEIVED' });
+  const appAIdempotent = await prisma.application.findUnique({ where: { id: appA.id } });
+  assert(
+    appAIdempotent?.formReceivedAt?.toISOString() === initialFormTime?.toISOString(),
+    'Idempotency: Form RECEIVED does not overwrite original formReceivedAt timestamp'
+  );
+  assert(
+    appAIdempotent?.cvReceivedAt?.toISOString() === initialCvTime?.toISOString(),
+    'Idempotency: CV RECEIVED does not overwrite original cvReceivedAt timestamp'
+  );
+
+  // 8. Explicit Shortlisting Trigger: Once Sibi shortlists candidate, gate immediately activates
+  const shortlistResponse = await ScreeningService.shortlistApplication(appA.id, sibiExec!.id, 'Eligible and documents verified on call');
+  assert(
+    shortlistResponse.currentStage === 'SCREENING_PENDING',
+    'Screening Gate Activation: Once candidate is explicitly SHORTLISTED with both Form + CV received, transitions immediately to SCREENING_PENDING'
+  );
+
+  const appAScreeningPending = await prisma.application.findUnique({ where: { id: appA.id } });
+  assert(appAScreeningPending?.readyForScreeningAt !== null, 'Screening Gate: readyForScreeningAt timestamp recorded');
+
+  // 9. Partial Document State Isolation with Candidate B
+  const candB = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-OPS-B-${opsTime.toString().slice(-5)}`,
+      fullName: 'Rajesh Kumar (Partial Docs)',
+      rawPhone: `94${String(opsTime + 22).slice(-8)}`,
+      normalizedPhone: `94${String(opsTime + 22).slice(-8)}`,
+      currentLocation: 'Bengaluru',
+      source: 'EXCEL_IMPORT',
+    },
+  });
+
+  const appB = await prisma.application.create({
+    data: {
+      applicationCode: `APP-OPS-B-${opsTime.toString().slice(-5)}`,
+      candidateId: candB.id,
+      jobId: opsJob.id,
+      companyId: opsCompany.id,
+      targetLocation: 'Bengaluru',
+      currentStage: 'SHORTLISTED',
+      assignedExecutiveId: sibiExec!.id,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  // Shortlisted + Form Received only -> remains SHORTLISTED
+  await ScreeningService.updateDocumentStatus(appB.id, sibiExec!.id, { formStatus: 'RECEIVED' });
+  const appBFormOnly = await prisma.application.findUnique({ where: { id: appB.id } });
+  assert(appBFormOnly?.currentStage === 'SHORTLISTED', 'Partial Document State: SHORTLISTED + Form ONLY does not enter screening (remains SHORTLISTED)');
+
+  // Shortlisted + Form Sent + CV Received only -> remains SHORTLISTED
+  const candC = await prisma.candidate.create({
+    data: {
+      candidateCode: `CAN-OPS-C-${opsTime.toString().slice(-5)}`,
+      fullName: 'Deepak Sharma (CV Only)',
+      rawPhone: `94${String(opsTime + 23).slice(-8)}`,
+      normalizedPhone: `94${String(opsTime + 23).slice(-8)}`,
+      currentLocation: 'Bengaluru',
+      source: 'EXCEL_IMPORT',
+    },
+  });
+
+  const appC = await prisma.application.create({
+    data: {
+      applicationCode: `APP-OPS-C-${opsTime.toString().slice(-5)}`,
+      candidateId: candC.id,
+      jobId: opsJob.id,
+      companyId: opsCompany.id,
+      targetLocation: 'Bengaluru',
+      currentStage: 'SHORTLISTED',
+      assignedExecutiveId: sibiExec!.id,
+      createdById: superAdminUser!.id,
+    },
+  });
+
+  await ScreeningService.updateDocumentStatus(appC.id, sibiExec!.id, { formStatus: 'SENT', cvStatus: 'CV_RECEIVED' });
+  const appCCvOnly = await prisma.application.findUnique({ where: { id: appC.id } });
+  assert(appCCvOnly?.currentStage === 'SHORTLISTED', 'Partial Document State: SHORTLISTED + CV ONLY does not enter screening (remains SHORTLISTED)');
+
+  // Once Form is also received for App C -> moves to SCREENING_PENDING
+  await ScreeningService.updateDocumentStatus(appC.id, sibiExec!.id, { formStatus: 'RECEIVED' });
+  const appCBoth = await prisma.application.findUnique({ where: { id: appC.id } });
+  assert(appCBoth?.currentStage === 'SCREENING_PENDING', 'Screening Gate: App C moves to SCREENING_PENDING once both Form + CV are received');
+
+  // 10. Verify Screening Queue Visibility in /api/screenings
+  const screeningQueueApps = await prisma.application.findMany({
+    where: { currentStage: 'SCREENING_PENDING' },
+  });
+  const queuedIds = screeningQueueApps.map((a) => a.id);
+  assert(queuedIds.includes(appA.id) && queuedIds.includes(appC.id), 'Screening Center: SCREENING_PENDING candidates appear in Screening Queue');
+  assert(!queuedIds.includes(appB.id), 'Screening Center: Incomplete document candidate (App B) is NOT in Screening Queue');
+
+  // 11. Productivity Metrics & Audit Trail Validation
+  const docAuditLogs = await prisma.auditLog.findMany({
+    where: { entityId: { in: [appA.id, appB.id, appC.id] }, action: 'DOCUMENT_STATUS_UPDATED' },
+  });
+  assert(docAuditLogs.length >= 4, 'Audit Trail: DOCUMENT_STATUS_UPDATED immutable audit records created');
+
+  const totalCallsBefore = await prisma.callLog.count();
+  // Updating document statuses should NOT create fake CallLogs
+  await ScreeningService.updateDocumentStatus(appB.id, sibiExec!.id, { cvStatus: 'CV_REQUESTED' });
+  const totalCallsAfter = await prisma.callLog.count();
+  assert(totalCallsBefore === totalCallsAfter, 'Productivity Integrity: Document updates do NOT create fake phone call records');
+
+  // ==========================================
+  // SUITE 24: MULTI-LOCATION VACANCY ALLOCATION & JOB CREATION
+  // ==========================================
+  console.log('\n--- Suite 24: Multi-Location Vacancy Allocation & Job Creation ---');
+
+  // 1. Single location with 10 vacancies -> validation passes
+  const singleLocValidation = CreateJobSchema.safeParse({
+    companyId: demoCompany.id,
+    jobTitle: 'Single Location Executive',
+    vacancies: 10,
+    location: 'Kalaburagi',
+    locations: [{ city: 'Kalaburagi', vacancies: 10 }],
+  });
+  assert(singleLocValidation.success === true, 'Single Location Schema: Valid 10/10 single location passes');
+
+  // 2. 4 locations: 3 + 2 + 3 + 2 = 10 -> validation passes
+  const multiLocValidation = CreateJobSchema.safeParse({
+    companyId: demoCompany.id,
+    jobTitle: 'Multi Location Executive',
+    vacancies: 10,
+    location: 'Kalaburagi, Bengaluru, Hyderabad, Pune',
+    locations: [
+      { city: 'Kalaburagi', vacancies: 3 },
+      { city: 'Bengaluru', vacancies: 2 },
+      { city: 'Hyderabad', vacancies: 3 },
+      { city: 'Pune', vacancies: 2 },
+    ],
+  });
+  assert(multiLocValidation.success === true, 'Multi Location Schema: 3 + 2 + 3 + 2 = 10 vacancies allocation passes');
+
+  // 3. Mismatched allocation: 3 + 2 + 3 = 8 with total 10 -> rejected
+  const underAllocValidation = CreateJobSchema.safeParse({
+    companyId: demoCompany.id,
+    jobTitle: 'Under Allocated Executive',
+    vacancies: 10,
+    location: 'Kalaburagi, Bengaluru, Hyderabad',
+    locations: [
+      { city: 'Kalaburagi', vacancies: 3 },
+      { city: 'Bengaluru', vacancies: 2 },
+      { city: 'Hyderabad', vacancies: 3 },
+    ],
+  });
+  assert(underAllocValidation.success === false, 'Allocation Validation: 8 / 10 vacancies is rejected');
+  if (!underAllocValidation.success) {
+    assert(
+      underAllocValidation.error.errors[0]?.message.includes('Allocated: 8 / 10'),
+      'Allocation Error Message: Contains exact Allocated: 8 / 10 mismatch details'
+    );
+  }
+
+  // 4. Over-allocated: 5 + 5 + 5 = 15 with total 10 -> rejected
+  const overAllocValidation = CreateJobSchema.safeParse({
+    companyId: demoCompany.id,
+    jobTitle: 'Over Allocated Executive',
+    vacancies: 10,
+    location: 'Kalaburagi, Bengaluru, Hyderabad',
+    locations: [
+      { city: 'Kalaburagi', vacancies: 5 },
+      { city: 'Bengaluru', vacancies: 5 },
+      { city: 'Hyderabad', vacancies: 5 },
+    ],
+  });
+  assert(overAllocValidation.success === false, 'Allocation Validation: 15 / 10 vacancies is rejected');
+
+  // 5. Zero vacancy location -> rejected
+  const zeroVacValidation = CreateJobSchema.safeParse({
+    companyId: demoCompany.id,
+    jobTitle: 'Zero Vacancy Executive',
+    vacancies: 5,
+    location: 'Kalaburagi, Bengaluru',
+    locations: [
+      { city: 'Kalaburagi', vacancies: 0 },
+      { city: 'Bengaluru', vacancies: 5 },
+    ],
+  });
+  assert(zeroVacValidation.success === false, 'Location Validation: Location vacancy of 0 is rejected');
+
+  // 6. Empty city name -> rejected
+  const emptyCityValidation = CreateJobSchema.safeParse({
+    companyId: demoCompany.id,
+    jobTitle: 'Empty City Executive',
+    vacancies: 5,
+    location: 'Kalaburagi',
+    locations: [{ city: '   ', vacancies: 5 }],
+  });
+  assert(emptyCityValidation.success === false, 'Location Validation: Blank city name is rejected');
+
+  // 7. Database Creation: Single Location (10 Vacancies) receives full 10 vacancies
+  const suite24SingleLocJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-S1-${Date.now()}`,
+      companyId: demoCompany.id,
+      jobTitle: 'Field Officer - Kalaburagi',
+      vacancies: 10,
+      location: 'Kalaburagi',
+      createdById: superAdminUser!.id,
+      locations: {
+        create: [{ city: 'Kalaburagi', vacancies: 10 }],
+      },
+    },
+    include: { locations: true },
+  });
+  assert(suite24SingleLocJob.locations.length === 1, 'Single-Location Job: Creates exactly 1 location record');
+  assert(suite24SingleLocJob.locations[0]?.vacancies === 10, 'Single-Location Job: Location record receives all 10 vacancies');
+
+  // 8. Database Creation: Multi Location (3 + 2 + 3 + 2 = 10)
+  const suite24MultiLocJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-M1-${Date.now()}`,
+      companyId: demoCompany.id,
+      jobTitle: 'Regional Sales Officer',
+      vacancies: 10,
+      location: 'Kalaburagi, Bengaluru, Hyderabad, Pune',
+      createdById: superAdminUser!.id,
+      locations: {
+        create: [
+          { city: 'Kalaburagi', vacancies: 3 },
+          { city: 'Bengaluru', vacancies: 2 },
+          { city: 'Hyderabad', vacancies: 3 },
+          { city: 'Pune', vacancies: 2 },
+        ],
+      },
+    },
+    include: { locations: true },
+  });
+  assert(suite24MultiLocJob.locations.length === 4, 'Multi-Location Job: Creates 4 distinct structured location records');
+  const totalCreatedVacancies = suite24MultiLocJob.locations.reduce((acc, l) => acc + l.vacancies, 0);
+  assert(totalCreatedVacancies === 10, 'Multi-Location Job: Sum of structured location vacancies equals 10');
+
+  // 9. Legacy Single-Location Fallback compatibility check
+  const suite24LegacyJob = await prisma.jobRequirement.create({
+    data: {
+      jobCode: `JOB-LEG-${Date.now()}`,
+      companyId: demoCompany.id,
+      jobTitle: 'Legacy Single Location Job',
+      vacancies: 5,
+      location: 'Mysuru, Karnataka',
+      createdById: superAdminUser!.id,
+    },
+    include: { locations: true },
+  });
+  assert(suite24LegacyJob.locations.length === 0, 'Legacy Job: No child location records');
+  assert(suite24LegacyJob.location === 'Mysuru, Karnataka', 'Legacy Job: Falls back cleanly to summary location string');
 
   // ==========================================
   // TEST SUMMARY

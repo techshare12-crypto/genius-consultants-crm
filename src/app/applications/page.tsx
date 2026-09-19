@@ -35,21 +35,43 @@ export default function ApplicationsPage() {
   // Timeline / History Modal
   const [timelineData, setTimelineData] = useState<any | null>(null);
 
+  const [assignmentFilter, setAssignmentFilter] = useState<'ALL' | 'UNASSIGNED' | 'ASSIGNED' | 'WORKING'>('ALL');
+  const [counts, setCounts] = useState({ unassigned: 0, assigned: 0, working: 0, total: 0 });
+
   useEffect(() => {
     fetchApplications();
     fetchExecutives();
-  }, [stageFilter, search]);
+  }, [stageFilter, search, assignmentFilter]);
 
   const fetchApplications = async () => {
     setLoading(true);
     try {
-      let url = `/api/applications?limit=100&search=${encodeURIComponent(search)}`;
+      let url = `/api/applications?limit=150&search=${encodeURIComponent(search)}`;
       if (stageFilter) url += `&stage=${stageFilter}`;
+      if (assignmentFilter === 'UNASSIGNED') url += `&unassigned=true`;
 
       const res = await fetch(url);
       if (res.ok) {
         const d = await res.json();
-        setApplications(d.data || []);
+        let apps: any[] = d.data || [];
+
+        if (assignmentFilter === 'ASSIGNED') {
+          apps = apps.filter((a) => !!a.assignedExecutiveId);
+        } else if (assignmentFilter === 'WORKING') {
+          apps = apps.filter((a) => ['CALLING', 'INTERESTED', 'SHORTLISTED', 'SCREENING_PENDING', 'INTERVIEW_SCHEDULED'].includes(a.currentStage));
+        }
+
+        setApplications(apps);
+
+        // Update counts
+        const allRes = await fetch('/api/applications?limit=250');
+        if (allRes.ok) {
+          const allData = (await allRes.json()).data || [];
+          const unassignedCount = allData.filter((a: any) => !a.assignedExecutiveId).length;
+          const assignedCount = allData.filter((a: any) => !!a.assignedExecutiveId).length;
+          const workingCount = allData.filter((a: any) => ['CALLING', 'INTERESTED', 'SHORTLISTED', 'SCREENING_PENDING', 'INTERVIEW_SCHEDULED'].includes(a.currentStage)).length;
+          setCounts({ unassigned: unassignedCount, assigned: assignedCount, working: workingCount, total: allData.length });
+        }
       }
     } catch (err) {
       console.error('Error fetching applications', err);
@@ -169,7 +191,62 @@ export default function ApplicationsPage() {
             <option value="SELECTED">Selected</option>
             <option value="JOINED">Joined</option>
           </select>
+        </div>
+      </div>
 
+      {/* Assignment State Tab Selector & Toolbar */}
+      <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex bg-slate-100 p-1 rounded-xl gap-1 text-xs font-semibold overflow-x-auto">
+          <button
+            onClick={() => setAssignmentFilter('ALL')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              assignmentFilter === 'ALL' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>All Applications</span>
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-slate-200 text-slate-700 font-bold">
+              {counts.total}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setAssignmentFilter('UNASSIGNED')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              assignmentFilter === 'UNASSIGNED' ? 'bg-white text-amber-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>Unassigned Leads</span>
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-amber-100 text-amber-800 font-bold">
+              {counts.unassigned}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setAssignmentFilter('ASSIGNED')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              assignmentFilter === 'ASSIGNED' ? 'bg-white text-teal-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>Assigned Leads</span>
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-teal-100 text-teal-800 font-bold">
+              {counts.assigned}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setAssignmentFilter('WORKING')}
+            className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              assignmentFilter === 'WORKING' ? 'bg-white text-purple-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>Currently Working</span>
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-purple-100 text-purple-800 font-bold">
+              {counts.working}
+            </span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
           {hasPermission('application.assign') && (
             <button
               disabled={selectedAppIds.length === 0}
@@ -177,7 +254,7 @@ export default function ApplicationsPage() {
               className="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
             >
               <UserCheck className="w-4 h-4" />
-              <span>Assign ({selectedAppIds.length})</span>
+              <span>Assign Selected ({selectedAppIds.length})</span>
             </button>
           )}
         </div>

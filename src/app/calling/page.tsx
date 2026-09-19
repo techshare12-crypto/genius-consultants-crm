@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Search,
   Filter,
+  FileText,
   RefreshCw,
   PhoneForwarded,
   Sparkles,
@@ -176,7 +177,9 @@ export default function ExecutiveCallingWorkspacePage() {
   const [refreshing, setRefreshing] = useState(false);
 
   // Active Tab inside Candidate View
-  const [activeRightTab, setActiveRightTab] = useState<'CALL_LOG' | 'VERIFICATION' | 'HISTORY'>('VERIFICATION');
+  const [activeRightTab, setActiveRightTab] = useState<'VERIFICATION' | 'DOCUMENTS' | 'CALL_LOG' | 'HISTORY'>('VERIFICATION');
+  const [docSubmitting, setDocSubmitting] = useState(false);
+  const [shortlisting, setShortlisting] = useState(false);
 
   // Clipboard feedbacks
   const [copiedPhone, setCopiedPhone] = useState(false);
@@ -383,6 +386,129 @@ export default function ExecutiveCallingWorkspacePage() {
       languages: ['Hindi', 'English'],
     });
     showToast('Pre-filled verification form from source master reference.');
+  };
+
+  const handleDocumentAction = async (action: 'FORM_SENT' | 'FORM_RECEIVED' | 'CV_REQUESTED' | 'CV_RECEIVED') => {
+    if (!selectedApp) return;
+    setDocSubmitting(true);
+    try {
+      const res = await fetch(`/api/applications/${selectedApp.id}/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setSelectedApp((prev: any) => ({
+          ...prev,
+          formStatus: d.data.formStatus,
+          cvStatus: d.data.cvStatus,
+          currentStage: d.data.currentStage,
+          readyForScreeningAt: d.data.readyForScreeningAt,
+        }));
+        setApplications((prev) =>
+          prev.map((a) =>
+            a.id === selectedApp.id
+              ? {
+                  ...a,
+                  formStatus: d.data.formStatus,
+                  cvStatus: d.data.cvStatus,
+                  currentStage: d.data.currentStage,
+                }
+              : a
+          )
+        );
+        showToast(`Document updated: ${action.replace(/_/g, ' ')}`);
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to update document', 'error');
+      }
+    } catch (e: any) {
+      showToast(e.message || 'Error updating document', 'error');
+    } finally {
+      setDocSubmitting(false);
+    }
+  };
+
+  const handleShortlistApplication = async () => {
+    if (!selectedApp) return;
+    setShortlisting(true);
+    try {
+      const res = await fetch(`/api/applications/${selectedApp.id}/shortlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: remarks || 'Shortlisted by calling executive' }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setSelectedApp((prev: any) => ({
+          ...prev,
+          currentStage: d.data.currentStage,
+        }));
+        setApplications((prev) =>
+          prev.map((a) =>
+            a.id === selectedApp.id ? { ...a, currentStage: d.data.currentStage } : a
+          )
+        );
+        showToast('Candidate shortlisted successfully! Document collection is now active.');
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'Failed to shortlist', 'error');
+      }
+    } catch (e: any) {
+      showToast('Failed to shortlist application', 'error');
+    } finally {
+      setShortlisting(false);
+    }
+  };
+
+  const getNextActionPrompt = (app: ApplicationItem) => {
+    const isFormReady = app.formStatus === 'RECEIVED';
+    const isCvReady = ['CV_RECEIVED', 'VERIFIED'].includes(app.cvStatus);
+
+    if (app.currentStage === 'NEW' || app.currentStage === 'ASSIGNED') {
+      return { text: 'Next: Call candidate & confirm details', variant: 'purple' as const };
+    }
+    if (app.currentStage === 'CALLING') {
+      return { text: 'Next: Complete call & log outcome', variant: 'info' as const };
+    }
+    if (app.currentStage === 'INTERESTED') {
+      return { text: 'Next: Shortlist candidate if suitable', variant: 'warning' as const };
+    }
+    if (app.currentStage === 'SHORTLISTED') {
+      if (!isFormReady && !isCvReady) {
+        return {
+          text: app.formStatus === 'SENT' ? 'Next: Follow up for Google Form' : 'Next: Send Google Form',
+          variant: 'warning' as const,
+        };
+      }
+      if (isFormReady && !isCvReady) {
+        return {
+          text: app.cvStatus === 'CV_REQUESTED' ? 'Next: Follow up for WhatsApp CV' : 'Next: Request CV via WhatsApp',
+          variant: 'warning' as const,
+        };
+      }
+      if (!isFormReady && isCvReady) {
+        return {
+          text: app.formStatus === 'SENT' ? 'Next: Follow up for Google Form' : 'Next: Send Google Form',
+          variant: 'warning' as const,
+        };
+      }
+      return { text: '✓ Ready for Screening Gate', variant: 'success' as const };
+    }
+    if (app.currentStage === 'SCREENING_PENDING') {
+      return { text: '✓ In Screening Queue (Waiting for Screening Manager)', variant: 'success' as const };
+    }
+    if (app.currentStage === 'SCREENING_PASSED') {
+      return { text: '✓ Passed Screening (Eligible for Final Shortlist)', variant: 'success' as const };
+    }
+    if (app.currentStage === 'FINAL_SHORTLIST') {
+      return { text: '✓ Final Shortlisted (Ready for Client Submission)', variant: 'purple' as const };
+    }
+    if (app.currentStage === 'SENT_TO_CLIENT') {
+      return { text: '✓ Submitted to Client (Interview Scheduling)', variant: 'info' as const };
+    }
+    return { text: `Stage: ${app.currentStage}`, variant: 'neutral' as const };
   };
 
   const handleRefresh = () => {
@@ -1377,9 +1503,56 @@ export default function ExecutiveCallingWorkspacePage() {
                 </div>
               </div>
 
-              {/* Source vs Verified Navigation Tabs */}
-              <div className="bg-white rounded-xl border border-slate-200 p-2 shadow-sm flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs">
+              {/* Next Action Indicator & Stage Progression Banner */}
+              <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className="font-bold text-slate-700">Stage:</span>
+                  <span className="px-2 py-0.5 rounded font-bold bg-slate-100 text-slate-800 border border-slate-200">
+                    {selectedApp.currentStage}
+                  </span>
+                  <span>•</span>
+                  <span className="font-bold text-slate-700">Action:</span>
+                  <span
+                    className={`px-2.5 py-1 rounded-lg font-bold border ${
+                      getNextActionPrompt(selectedApp).variant === 'success'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                        : getNextActionPrompt(selectedApp).variant === 'warning'
+                        ? 'bg-amber-50 text-amber-800 border-amber-300'
+                        : getNextActionPrompt(selectedApp).variant === 'purple'
+                        ? 'bg-purple-50 text-purple-800 border-purple-300'
+                        : 'bg-teal-50 text-teal-800 border-teal-300'
+                    }`}
+                  >
+                    {getNextActionPrompt(selectedApp).text}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {(selectedApp.currentStage === 'INTERESTED' || selectedApp.currentStage === 'CALLING') && (
+                    <button
+                      onClick={handleShortlistApplication}
+                      disabled={shortlisting}
+                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Shortlist Candidate</span>
+                    </button>
+                  )}
+
+                  {selectedApp.currentStage === 'SCREENING_PENDING' && (
+                    <a
+                      href="/screening"
+                      className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
+                    >
+                      <span>Screening Queue ➔</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* Navigation Tabs */}
+              <div className="bg-white rounded-xl border border-slate-200 p-2 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs overflow-x-auto">
                   <button
                     onClick={() => setActiveRightTab('VERIFICATION')}
                     className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-colors ${
@@ -1389,7 +1562,24 @@ export default function ExecutiveCallingWorkspacePage() {
                     }`}
                   >
                     <CheckCircle className="w-3.5 h-3.5" />
-                    <span>Candidate Verification & Qualification</span>
+                    <span>Candidate Verification</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveRightTab('DOCUMENTS')}
+                    className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-colors ${
+                      activeRightTab === 'DOCUMENTS'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Documents & Screening Gate</span>
+                    {selectedApp.formStatus === 'RECEIVED' && (selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED') ? (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    ) : selectedApp.formStatus === 'RECEIVED' || selectedApp.cvStatus === 'CV_RECEIVED' ? (
+                      <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                    ) : null}
                   </button>
 
                   <button
@@ -1401,7 +1591,7 @@ export default function ExecutiveCallingWorkspacePage() {
                     }`}
                   >
                     <PhoneCall className="w-3.5 h-3.5" />
-                    <span>Record Call Outcome</span>
+                    <span>Record Call</span>
                   </button>
 
                   <button
@@ -1419,12 +1609,168 @@ export default function ExecutiveCallingWorkspacePage() {
 
                 <button
                   onClick={() => setShowWhatsAppModal(true)}
-                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors self-start md:self-auto"
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
                   <span>WhatsApp</span>
                 </button>
               </div>
+
+              {/* TAB 1: DOCUMENTS & SCREENING GATE */}
+              {activeRightTab === 'DOCUMENTS' && (
+                <div className="space-y-4">
+                  {/* Screening Gate Overview Card */}
+                  <div className={`rounded-xl border p-4 shadow-sm text-xs ${
+                    selectedApp.formStatus === 'RECEIVED' && (selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED')
+                      ? 'bg-emerald-50/70 border-emerald-200'
+                      : 'bg-slate-50 border-slate-200'
+                  }`}>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                          Internal Screening Gate Status
+                        </div>
+                        <div className="text-sm font-bold text-slate-900 mt-0.5 flex items-center gap-2">
+                          {selectedApp.formStatus === 'RECEIVED' && (selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED') ? (
+                            <>
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              <span className="text-emerald-800">All Required Documents Received — Ready for Screening Queue</span>
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-4 h-4 text-amber-600" />
+                              <span className="text-slate-800">Documents Incomplete — Awaiting Collection</span>
+                            </>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-1">
+                          Candidate enters the Screening Center queue only when both Google Form and WhatsApp CV are verified.
+                        </p>
+                      </div>
+
+                      {selectedApp.currentStage !== 'SHORTLISTED' && selectedApp.currentStage !== 'SCREENING_PENDING' && (
+                        <button
+                          onClick={handleShortlistApplication}
+                          disabled={shortlisting}
+                          className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shrink-0 shadow-sm transition-colors disabled:opacity-50"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Shortlist Candidate First</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 2-Column Document Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Google Form Card */}
+                    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-teal-600" />
+                          <h4 className="text-xs font-bold text-slate-900">Google Form Status</h4>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
+                            selectedApp.formStatus === 'RECEIVED'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : selectedApp.formStatus === 'SENT'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {selectedApp.formStatus === 'RECEIVED'
+                            ? '🟢 Received'
+                            : selectedApp.formStatus === 'SENT'
+                            ? '🟡 Form Sent'
+                            : '⚪ Not Sent'}
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-slate-500">
+                        Tracks candidate registration and background confirmation form.
+                      </p>
+
+                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => handleDocumentAction('FORM_SENT')}
+                          disabled={docSubmitting || selectedApp.formStatus === 'RECEIVED'}
+                          className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+                        >
+                          Mark Form Sent
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDocumentAction('FORM_RECEIVED')}
+                          disabled={docSubmitting || selectedApp.formStatus === 'RECEIVED'}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                            selectedApp.formStatus === 'RECEIVED'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+                          }`}
+                        >
+                          {selectedApp.formStatus === 'RECEIVED' ? '✓ Received' : 'Mark Form Received'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* WhatsApp CV Card */}
+                    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MessageSquare className="w-4 h-4 text-emerald-600" />
+                          <h4 className="text-xs font-bold text-slate-900">WhatsApp CV Status</h4>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
+                            selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : selectedApp.cvStatus === 'CV_REQUESTED'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED'
+                            ? '🟢 Received'
+                            : selectedApp.cvStatus === 'CV_REQUESTED'
+                            ? '🟡 Requested'
+                            : '⚪ Not Requested'}
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-slate-500">
+                        CV is received manually via WhatsApp. (File is not uploaded to CRM).
+                      </p>
+
+                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => handleDocumentAction('CV_REQUESTED')}
+                          disabled={docSubmitting || selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED'}
+                          className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+                        >
+                          Request CV
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDocumentAction('CV_RECEIVED')}
+                          disabled={docSubmitting || selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED'}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                            selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+                          }`}
+                        >
+                          {selectedApp.cvStatus === 'CV_RECEIVED' || selectedApp.cvStatus === 'VERIFIED' ? '✓ Received' : 'Mark CV Received'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* TAB 1: CANDIDATE VERIFICATION & LIVE QUALIFICATION MATCHING */}
               {activeRightTab === 'VERIFICATION' && (
